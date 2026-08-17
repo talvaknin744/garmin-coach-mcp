@@ -14,7 +14,7 @@
 - [x] Preview, approve, create, schedule, and verify one live week.
 - [x] Retry workout apply and prove idempotency; profile retry verified no-op.
 - [x] Run final gates.
-- [ ] Publish GitHub repository and verify remote/CI.
+- [x] Publish GitHub repository and verify remote/CI.
 
 ## Acceptance
 
