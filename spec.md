@@ -2,7 +2,7 @@
 
 ## Scope
 
-Single-user local MCP over stdio. Supported clients: Codex/ChatGPT desktop on the same host and Claude. ChatGPT web is outside scope because it cannot start a local stdio process. Source repository: `talvaknin744/garmin-coach-mcp`.
+Single-user local MCP over stdio. Supported clients: Codex/ChatGPT desktop on the same host and Claude. ChatGPT web is outside scope because it cannot start a local stdio process. Source repository: `talvaknin744/garmin-coach-mcp`; CI gates install, test, lint, formatting, types, and build on `main`.
 
 ## Tools
 

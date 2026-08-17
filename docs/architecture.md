@@ -20,6 +20,8 @@ The process never listens on a TCP port. `GarminClient` launches a dedicated per
 
 The public source repository contains code and configuration examples only. Browser sessions, captured contracts, rollback snapshots, and locks remain outside the repository in owner-only local directories.
 
+GitHub CI uses Node 24 and pnpm 10.14.0, then runs the same offline install, test, lint, formatting, type, and build gates used locally.
+
 Training proposals are deterministic JSON. The apply path validates the approved hash, health blockers, six-hour snapshot freshness, deterministic markers, existing Garmin state, and final read-back. It creates only missing workouts and never deletes.
 
 Profile writes are fail-closed. The capture command invokes Garmin's current app model with unchanged default zones, intercepts its `PUT`, and records proof only after abort succeeds. It validates the unchanged body and stores only the redacted request shape. Apply clones fresh zone objects, preserves unknown fields and auto flags, creates running zones only when the primary device advertises support, writes a minimal rollback summary, and verifies exact ranges through fresh profile and zone reads.
