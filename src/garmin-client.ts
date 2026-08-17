@@ -1,309 +1,232 @@
-import { readFileSync, existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { existsSync } from "node:fs";
+import { chromium, type BrowserContext, type Page } from "playwright";
 
-const SESSION_DIR = join(homedir(), ".garmin-connect-mcp");
-const SESSION_FILE = join(SESSION_DIR, "session.json");
+import {
+  ensurePrivateDir,
+  hardenTree,
+  LOCAL_PATHS,
+  ProcessLock,
+} from "./local-state.js";
 
-interface Cookie {
-  name: string;
-  value: string;
-  domain: string;
+export type GarminMethod = "GET" | "POST" | "PUT" | "PATCH";
+
+const BASE_URL = "https://connect.garmin.com/app/";
+const STATIC_URL =
+  "https://connect.garmin.com/site-status/garmin-connect-status.json";
+const API_PATH = /^[A-Za-z0-9][A-Za-z0-9/_-]*\/?$/;
+const SESSION_CHECK = "userprofile-service/userprofile/user-settings/";
+
+function browserEnvironment(headless: boolean) {
+  if (headless || process.env.DISPLAY) return process.env;
+  const uid = process.getuid?.();
+  const display = existsSync("/tmp/.X11-unix/X1") ? ":1" : ":0";
+  return {
+    ...process.env,
+    DISPLAY: display,
+    ...(uid === undefined
+      ? {}
+      : {
+          XAUTHORITY: `/run/user/${uid}/gdm/Xauthority`,
+          DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus`,
+        }),
+  };
 }
 
-interface SessionData {
-  csrf_token: string;
-  cookies: Cookie[];
-}
-
-export function getSessionDir(): string {
-  return SESSION_DIR;
-}
-
-export function getSessionFile(): string {
-  return SESSION_FILE;
-}
-
-export function sessionExists(): boolean {
-  return existsSync(SESSION_FILE);
-}
-
-function loadSession(): SessionData {
-  if (!existsSync(SESSION_FILE)) {
-    throw new Error(
-      `No saved session found at ${SESSION_FILE}. Run: npx garmin-connect-mcp login`
-    );
+export async function waitForGarminSession(page: Page): Promise<string> {
+  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const status = await page.evaluate(async (path) => {
+      const csrf = document
+        .querySelector('meta[name="csrf-token"]')
+        ?.getAttribute("content");
+      if (!csrf) return 0;
+      return fetch(`/gc-api/${path}`, {
+        credentials: "include",
+        headers: { "connect-csrf-token": csrf, Accept: "*/*" },
+      }).then((response) => response.status);
+    }, SESSION_CHECK);
+    if (status === 200) {
+      const csrf = await page
+        .locator('meta[name="csrf-token"]')
+        .getAttribute("content");
+      if (csrf) return csrf;
+    }
+    await page.waitForTimeout(500);
   }
-  return JSON.parse(readFileSync(SESSION_FILE, "utf-8"));
+  throw new Error(
+    "Garmin session missing, expired, or not ready; run pnpm auth"
+  );
 }
 
-/**
- * Garmin Connect API client that routes requests through a headless Playwright
- * browser to bypass Cloudflare TLS fingerprinting.
- *
- * The browser navigates to connect.garmin.com once (with saved cookies),
- * then all API calls are made via page.evaluate(fetch(...)) from the
- * browser context — inheriting the real Chrome TLS fingerprint.
- */
+export function validApiPath(path: string): string {
+  const normalized = path.replace(/^\/+/, "");
+  if (!API_PATH.test(normalized) || normalized.includes("..")) {
+    throw new Error("Invalid Garmin API path");
+  }
+  return normalized;
+}
+
+export async function launchGarminContext(headless: boolean) {
+  const lock = await ProcessLock.acquire();
+  try {
+    await ensurePrivateDir(LOCAL_PATHS.browserProfile);
+    await hardenTree(LOCAL_PATHS.browserProfile);
+    const context = await chromium.launchPersistentContext(
+      LOCAL_PATHS.browserProfile,
+      {
+        channel: "chrome",
+        headless,
+        env: browserEnvironment(headless),
+        ignoreDefaultArgs: ["--enable-automation"],
+        viewport: { width: 1440, height: 1000 },
+        args: [
+          "--disable-blink-features=AutomationControlled",
+          "--disable-save-password-bubble",
+          "--disable-features=AutofillEnableAccountWalletStorage,AutofillServerCommunication,PasswordManagerOnboarding,PasswordLeakDetection",
+        ],
+      }
+    );
+    return { context, lock };
+  } catch (error) {
+    await lock.release();
+    throw error;
+  }
+}
+
 export class GarminClient {
-  private page: any = null; // playwright Page
-  private browser: any = null;
-  private csrfToken: string;
-  private cookies: Cookie[];
-  private initialized = false;
-  private displayName: string | null = null;
+  private context: BrowserContext | null = null;
+  private page: Page | null = null;
+  private lock: ProcessLock | null = null;
+  private csrfToken: string | null = null;
+  private initPromise: Promise<Page> | null = null;
 
-  constructor(sessionPath?: string) {
-    const session = sessionPath
-      ? JSON.parse(readFileSync(sessionPath, "utf-8"))
-      : loadSession();
-
-    this.csrfToken = session.csrf_token;
-    this.cookies = session.cookies;
-  }
-
-  private async init(): Promise<void> {
-    if (this.initialized) return;
-
-    let playwright;
+  private async init(): Promise<Page> {
+    if (this.page) return this.page;
+    this.initPromise ??= this.start();
     try {
-      playwright = await import("playwright");
-    } catch {
-      throw new Error(
-        "Playwright is required. Install: npm install playwright && npx playwright install chromium"
-      );
+      return await this.initPromise;
+    } finally {
+      this.initPromise = null;
     }
-
-    this.browser = await playwright.chromium.launch({ headless: true });
-    const context = await this.browser.newContext();
-
-    // Load saved cookies into the browser context
-    await context.addCookies(
-      this.cookies.map((c) => ({
-        name: c.name,
-        value: c.value,
-        domain: c.domain,
-        path: "/",
-      }))
-    );
-
-    this.page = await context.newPage();
-
-    // Navigate to a static endpoint on connect.garmin.com to set the origin.
-    // We avoid /app/* routes because they redirect through sso.garmin.com
-    // which may be rate-limited by Cloudflare.
-    await this.page.goto(
-      "https://connect.garmin.com/site-status/garmin-connect-status.json",
-      { waitUntil: "domcontentloaded", timeout: 30000 }
-    );
-
-    this.initialized = true;
-    console.error("Garmin browser session initialized");
   }
 
-  async getDisplayName(): Promise<string> {
-    if (this.displayName) return this.displayName;
-    const settings = (await this.get(
-      "userprofile-service/userprofile/settings"
-    )) as Record<string, unknown>;
-    this.displayName = settings.displayName as string;
-    if (!this.displayName) {
-      throw new Error(
-        "Could not resolve displayName from userprofile settings"
-      );
+  private async start(): Promise<Page> {
+    const launched = await launchGarminContext(true);
+    this.context = launched.context;
+    this.lock = launched.lock;
+    this.page = this.context.pages()[0] ?? (await this.context.newPage());
+    try {
+      this.csrfToken = await waitForGarminSession(this.page);
+      await this.page.goto(STATIC_URL, { waitUntil: "domcontentloaded" });
+    } catch (error) {
+      await this.close();
+      throw error;
     }
-    return this.displayName;
-  }
-
-  async close(): Promise<void> {
-    if (this.browser) {
-      await this.browser.close();
-      this.browser = null;
-      this.page = null;
-      this.initialized = false;
-    }
+    return this.page;
   }
 
   async get(
     path: string,
-    params?: Record<string, string | number>
+    params: Record<string, string | number | boolean> = {}
   ): Promise<unknown> {
-    await this.init();
-
-    let url = `/gc-api/${path}`;
-    if (params) {
-      const qs = new URLSearchParams();
-      for (const [k, v] of Object.entries(params)) {
-        qs.set(k, String(v));
-      }
-      url += `?${qs.toString()}`;
-    }
-
-    const csrfToken = this.csrfToken;
-    const result = await this.page.evaluate(
-      async ({ url, csrfToken }: { url: string; csrfToken: string }) => {
-        const resp = await fetch(url, {
-          headers: {
-            "connect-csrf-token": csrfToken,
-            Accept: "*/*",
-          },
-        });
-        const text = await resp.text();
-        return { status: resp.status, body: text };
-      },
-      { url, csrfToken }
+    const query = new URLSearchParams(
+      Object.entries(params).map(([key, value]) => [key, String(value)])
     );
-
-    if (result.status === 204 || (result.status === 200 && !result.body)) {
-      return { noData: true, status: result.status, path };
-    }
-    if (result.status === 401) {
-      // Invalidate the singleton so the next call re-reads the session file
-      _sharedClient = null;
-      await this.close();
-      throw new Error(`Garmin API 401: ${path} — ${result.body}`);
-    }
-    if (result.status !== 200) {
-      throw new Error(`Garmin API ${result.status}: ${path} — ${result.body}`);
-    }
-    return JSON.parse(result.body);
+    const suffix = query.size ? `?${query.toString()}` : "";
+    return this.request("GET", `${validApiPath(path)}${suffix}`);
   }
 
-  async getBytes(path: string): Promise<Buffer> {
-    await this.init();
-
-    const url = `/gc-api/${path}`;
-    const csrfToken = this.csrfToken;
-
-    const result = await this.page.evaluate(
-      async ({ url, csrfToken }: { url: string; csrfToken: string }) => {
-        const resp = await fetch(url, {
-          headers: {
-            "connect-csrf-token": csrfToken,
-            Accept: "*/*",
-          },
-        });
-        if (!resp.ok) {
-          return { status: resp.status, error: await resp.text(), data: null };
-        }
-        const buf = await resp.arrayBuffer();
-        // Convert to base64 to pass through page.evaluate boundary
-        const bytes = new Uint8Array(buf);
-        let binary = "";
-        for (let i = 0; i < bytes.length; i++) {
-          binary += String.fromCharCode(bytes[i]);
-        }
-        return { status: resp.status, error: null, data: btoa(binary) };
-      },
-      { url, csrfToken }
-    );
-
-    if (result.status !== 200 || !result.data) {
+  async request(
+    method: GarminMethod,
+    pathWithQuery: string,
+    body?: unknown
+  ): Promise<unknown> {
+    const [path, query = ""] = pathWithQuery.split("?", 2);
+    const endpoint = `${validApiPath(path)}${query ? `?${query}` : ""}`;
+    const page = await this.init();
+    let result = await this.send(page, method, endpoint, body);
+    if (result.status === 401 || result.status === 403) {
+      this.csrfToken = await waitForGarminSession(page);
+      await page.goto(STATIC_URL, { waitUntil: "domcontentloaded" });
+      result = await this.send(page, method, endpoint, body);
+    }
+    if (!result.ok) {
+      if (result.status === 401 || result.status === 403) await this.close();
       throw new Error(
-        `Garmin API ${result.status}: ${path} — ${result.error ?? ""}`
+        `Garmin request failed: ${method} ${path} returned HTTP ${result.status}`
       );
     }
-    return Buffer.from(result.data, "base64");
+    return result.data;
   }
 
-  async post(path: string, body: unknown): Promise<unknown> {
-    await this.init();
-
-    const url = `/gc-api/${path}`;
-    const csrfToken = this.csrfToken;
-    const bodyStr = JSON.stringify(body);
-
-    const result = await this.page.evaluate(
-      async ({
-        url,
-        csrfToken,
-        bodyStr,
-      }: {
-        url: string;
-        csrfToken: string;
-        bodyStr: string;
-      }) => {
-        const resp = await fetch(url, {
-          method: "POST",
-          headers: {
-            "connect-csrf-token": csrfToken,
-            "Content-Type": "application/json",
-            Accept: "application/json, */*",
-          },
-          body: bodyStr,
+  private async send(
+    page: Page,
+    method: GarminMethod,
+    endpoint: string,
+    body?: unknown
+  ) {
+    const csrf = this.csrfToken;
+    if (!csrf) throw new Error("Garmin session missing; run pnpm auth");
+    return page.evaluate(
+      async ({ requestMethod, requestPath, requestBody, csrfToken }) => {
+        const headers: Record<string, string> = {
+          Accept: requestMethod === "GET" ? "*/*" : "application/json, */*",
+          "connect-csrf-token": csrfToken,
+        };
+        if (requestBody !== undefined)
+          headers["Content-Type"] = "application/json";
+        const response = await fetch(`/gc-api/${requestPath}`, {
+          method: requestMethod,
+          credentials: "include",
+          headers,
+          ...(requestBody === undefined
+            ? {}
+            : { body: JSON.stringify(requestBody) }),
         });
-        const text = await resp.text();
-        return { status: resp.status, body: text };
+        const text = await response.text();
+        let data: unknown = null;
+        if (text) {
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = null;
+          }
+        }
+        return { ok: response.ok, status: response.status, data };
       },
-      { url, csrfToken, bodyStr }
+      {
+        requestMethod: method,
+        requestPath: endpoint,
+        requestBody: body,
+        csrfToken: csrf,
+      }
     );
-
-    if (result.status === 204 || (result.status === 200 && !result.body)) {
-      return { noData: true, status: result.status, path };
-    }
-    if (result.status < 200 || result.status >= 300) {
-      throw new Error(`Garmin API ${result.status}: ${path} — ${result.body}`);
-    }
-    return JSON.parse(result.body);
   }
 
-  async delete(path: string): Promise<unknown> {
-    await this.init();
-
-    const url = `/gc-api/${path}`;
-    const csrfToken = this.csrfToken;
-
-    const result = await this.page.evaluate(
-      async ({ url, csrfToken }: { url: string; csrfToken: string }) => {
-        const resp = await fetch(url, {
-          method: "DELETE",
-          headers: {
-            "connect-csrf-token": csrfToken,
-            Accept: "*/*",
-          },
-        });
-        const text = await resp.text();
-        return { status: resp.status, body: text };
-      },
-      { url, csrfToken }
-    );
-
-    if (result.status === 204 || (result.status === 200 && !result.body)) {
-      return { noData: true, status: result.status, path };
-    }
-    if (result.status < 200 || result.status >= 300) {
-      throw new Error(`Garmin API ${result.status}: ${path} — ${result.body}`);
-    }
-    return result.body ? JSON.parse(result.body) : { success: true };
+  async close(): Promise<void> {
+    const context = this.context;
+    const lock = this.lock;
+    this.context = null;
+    this.page = null;
+    this.lock = null;
+    this.csrfToken = null;
+    this.initPromise = null;
+    await context?.close().catch(() => undefined);
+    await hardenTree(LOCAL_PATHS.browserProfile).catch(() => undefined);
+    await lock?.release();
   }
 }
 
-// Singleton client for reuse across tool calls
-let _sharedClient: GarminClient | null = null;
+let shared: GarminClient | null = null;
 
-export function getSharedClient(): GarminClient {
-  if (!_sharedClient) {
-    _sharedClient = new GarminClient();
-  }
-  return _sharedClient;
+export function getClient(): GarminClient {
+  shared ??= new GarminClient();
+  return shared;
 }
 
-export async function resetSharedClient(): Promise<void> {
-  if (_sharedClient) {
-    await _sharedClient.close();
-    _sharedClient = null;
-  }
+export async function closeClient(): Promise<void> {
+  const client = shared;
+  shared = null;
+  await client?.close();
 }
-
-// Clean up on process exit
-process.on("exit", () => {
-  _sharedClient?.close();
-});
-process.on("SIGINT", () => {
-  _sharedClient?.close();
-  process.exit(0);
-});
-process.on("SIGTERM", () => {
-  _sharedClient?.close();
-  process.exit(0);
-});

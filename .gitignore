@@ -1,5 +1,7 @@
 node_modules/
 dist/
+.test-dist/
+.codex/
 *.tsbuildinfo
 .env
 fit_files/

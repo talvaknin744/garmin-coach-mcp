@@ -16,9 +16,5 @@ export default tseslint.config(
       "no-console": ["warn", { allow: ["error"] }],
     },
   },
-  {
-    files: ["src/test.ts"],
-    rules: { "no-console": "off" },
-  },
-  { ignores: ["node_modules/**", "dist/**"] }
+  { ignores: ["node_modules/**", "dist/**", ".test-dist/**"] }
 );

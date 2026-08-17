@@ -1,4 +1,11 @@
-Contains code from https://github.com/Taxuspt/garmin_mcp
+Local Garmin Coach MCP is based on
+https://github.com/etweisberg/garmin-connect-mcp at commit
+87d0ea059fb67f1ce65ac05100df74c3c3777c84.
+
+Original project copyright (C) 2026 Ethan Weisberg, licensed under AGPL-3.0.
+Local coaching, safety, and approval-gate modifications were made in 2026.
+
+The upstream project contains code from https://github.com/Taxuspt/garmin_mcp
 
 MIT License
 

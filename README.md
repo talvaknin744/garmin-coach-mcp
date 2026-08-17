@@ -1,223 +1,122 @@
-# garmin-connect-mcp
+# Local Garmin Coach MCP
 
-[![CI](https://github.com/etweisberg/garmin-connect-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/etweisberg/garmin-connect-mcp/actions/workflows/ci.yml)
-[![Release](https://github.com/etweisberg/garmin-connect-mcp/actions/workflows/release.yml/badge.svg)](https://github.com/etweisberg/garmin-connect-mcp/actions/workflows/release.yml)
-[![npm](https://img.shields.io/npm/v/@etweisberg/garmin-connect-mcp)](https://www.npmjs.com/package/@etweisberg/garmin-connect-mcp)
-[![npm downloads](https://img.shields.io/npm/dm/@etweisberg/garmin-connect-mcp)](https://www.npmjs.com/package/@etweisberg/garmin-connect-mcp)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
+Private, single-user Garmin coaching tools for Codex/ChatGPT desktop and Claude. The server is local stdio only: no Cloudflare, Render, public URL, account service, or hosting cost.
 
-MCP server for Garmin Connect. Access your activities, health stats, sleep data, FIT files, and more from Claude Code or any MCP client.
+The runtime is based on [`etweisberg/garmin-connect-mcp`](https://github.com/etweisberg/garmin-connect-mcp) at commit `87d0ea059fb67f1ce65ac05100df74c3c3777c84`. It keeps the upstream AGPL-3.0 license and Taxuspt attribution in [NOTICE](NOTICE).
 
-## Why This Exists
+## Prerequisites
 
-In March 2026, Garmin changed their authentication API, breaking [garth](https://github.com/matin/garth) and [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) — the two most popular libraries for accessing Garmin data programmatically. Garth has been [officially deprecated](https://github.com/matin/garth/discussions/222). Garmin added Cloudflare TLS fingerprinting that blocks all non-browser HTTP clients (Node.js `fetch`, Python `requests`, `curl`) from their API endpoints.
-
-This project works around that by routing all API calls through a headless Playwright browser, inheriting a real Chrome TLS fingerprint. Authentication uses browser cookies captured from a manual login session.
+- Node.js 20 or newer
+- pnpm 10.14.0
+- A Garmin Connect account and synced watch
 
 ## Install
 
 ```bash
-npm install -g @etweisberg/garmin-connect-mcp
-npx playwright install chromium
+cd /home/talvak/Desktop/repos/garmin-coach-mcp
+pnpm install --frozen-lockfile
+pnpm exec playwright install chromium
+pnpm build
+pnpm auth
 ```
 
-Then register with Claude Code:
+`pnpm auth` opens a dedicated visible Chrome profile. Log in manually, complete MFA, then press Enter in the terminal. The browser session stays under `~/.local/share/garmin-coach/browser-profile`. Runtime CSRF values are read from the current authenticated page and never persisted or printed. Directories are `0700`, files are `0600`, password saving is disabled, and no username/password file is created.
+
+## Capture Garmin's profile-write contract
+
+Garmin does not publish a stable heart-rate profile write API. The server refuses to guess it.
 
 ```bash
-claude mcp add garmin -- npx @etweisberg/garmin-connect-mcp
+pnpm capture:profile-contract
 ```
 
-You also need the Playwright MCP server for the login flow:
+The command loads Garmin's current app model, asks it to save the unchanged current default zones, and blocks the resulting `PUT` before delivery. It validates the route and exact unchanged body, then stores only a redacted method/path/field shape and supported scopes in `~/.local/state/garmin-coach/profile-write-contract.json` with mode `0600`.
+
+If Garmin's shape cannot be proven, no contract is saved and profile writes remain disabled.
+
+## Connect Codex and ChatGPT desktop
+
+Build first, then copy [config/codex.toml.example](config/codex.toml.example) into `~/.codex/config.toml`, or add the equivalent server through ChatGPT desktop Settings > MCP servers. Codex CLI, the IDE extension, and ChatGPT desktop share local MCP configuration on the same host.
+
+The example uses:
+
+```toml
+default_tools_approval_mode = "writes"
+```
+
+Both apply tools also have explicit `approval_mode = "prompt"`. Restart the client after configuration and use `/mcp` to verify connection.
+
+ChatGPT web cannot start this local stdio process. Use ChatGPT desktop/Codex for Garmin writes.
+
+## Connect Claude
+
+Merge [config/claude.json.example](config/claude.json.example) into Claude's MCP configuration, or run:
 
 ```bash
-claude mcp add playwright -- npx @playwright/mcp@latest
+claude mcp add garmin-coach -- /home/talvak/snap/code/current/.local/share/pnpm/node /home/talvak/Desktop/repos/garmin-coach-mcp/dist/index.js
 ```
 
-### Prerequisites
+The filesystem lock permits only one local client to own the Garmin Chromium profile at a time. Stop the server in one client before using the other.
 
-- Node.js 18+
-- Playwright MCP server (for browser-based login)
-- A Garmin Connect account with a synced device
+## Tools
 
-## Setup
+| Tool | Garmin write |
+| --- | --- |
+| `get_coaching_snapshot` | No |
+| `get_training_program` | No |
+| `preview_training_week` | No |
+| `apply_training_week` | Yes, approval required |
+| `verify_training_week` | No |
+| `preview_hr_profile_update` | No |
+| `apply_hr_profile_update` | Yes, separate approval required |
 
-### 1. Login
+## Safe workflow
 
-In Claude Code, call the `garmin-login` tool. It will walk you through:
+1. Call `get_coaching_snapshot` and compare it with Garmin Connect.
+2. Call `preview_hr_profile_update`.
+3. Review every field and approve the exact canonical proposal/hash.
+4. Call `apply_hr_profile_update`; then sync Garmin and visually verify watch zones.
+5. Call `preview_training_week` for one Sunday-starting week.
+6. Review its recovery evidence, complete payload, warnings, and hash.
+7. Call `apply_training_week` with the unchanged canonical proposal/hash.
+8. Call `verify_training_week` and confirm Monday/Friday are `135-149 bpm`; Friday must display fixed `12%` instructions.
+9. Retry both apply calls to prove idempotency.
 
-1. Opening Garmin Connect in the Playwright browser
-2. Logging in manually
-3. Extracting cookies and CSRF token
-4. Saving the session to `~/.garmin-connect-mcp/session.json`
+Pain/injury or illness blocks workout writes. Recovery can keep, reduce, or skip; it never increases load. Workouts are never deleted automatically.
 
-### 2. Verify
+Garmin exposes Treadmill as a watch activity beneath Running, not as a structured-workout sport. Friday is therefore a running-compatible workout named `Incline Walk 12%`; start it from the watch's Treadmill activity. Its `12%` incline cue and `135-149 bpm` target remain explicit.
 
-Call the `check-session` tool to confirm authentication works.
+## Approved HR profile
 
-Session cookies expire after a few hours. Re-run the login flow when they do.
+| Field | Value |
+| --- | --- |
+| Maximum HR | 189 bpm |
+| Resting HR | 55 bpm |
+| Lactate threshold HR | 181 bpm |
+| Basis | Heart-rate reserve/custom BPM |
+| Zone 1 | 122-134 bpm |
+| Zone 2 | 135-149 bpm |
+| Zone 3 | 150-162 bpm |
+| Zone 4 | 163-176 bpm |
+| Zone 5 | 177-189 bpm |
 
-## Available Tools
+These values are provisional: age 27, resting HR 55, estimated max HR 189, and manual LTHR 181. Automatic-detection flags are preserved. Future changes require another preview and approval.
 
-### Session & Auth
+## Verification
 
-| Tool            | Description                                               |
-| --------------- | --------------------------------------------------------- |
-| `garmin-login`  | Returns login instructions for the Playwright MCP browser |
-| `check-session` | Validates the saved session is still active               |
-| `run-tests`     | Returns a test plan to verify all tools work              |
-
-### Activities
-
-| Tool                    | Description                                              |
-| ----------------------- | -------------------------------------------------------- |
-| `list-activities`       | List activities with pagination                          |
-| `get-activity`          | Full activity summary (distance, duration, HR, calories) |
-| `get-activity-details`  | Time-series metrics (HR, cadence, elevation over time)   |
-| `get-activity-splits`   | Lap/split data                                           |
-| `get-activity-hr-zones` | Heart rate time-in-zone breakdown                        |
-| `get-activity-polyline` | Full-resolution GPS track                                |
-| `get-activity-weather`  | Weather conditions during activity                       |
-| `download-fit`          | Download original FIT file                               |
-
-### Daily Health
-
-| Tool                          | Description                                  |
-| ----------------------------- | -------------------------------------------- |
-| `get-daily-summary`           | Steps, calories, distance, intensity minutes |
-| `get-daily-heart-rate`        | Heart rate data throughout the day           |
-| `get-daily-stress`            | Stress levels throughout the day             |
-| `get-daily-summary-chart`     | Combined wellness chart data                 |
-| `get-daily-intensity-minutes` | Intensity minutes for a date                 |
-| `get-daily-movement`          | Movement/activity data                       |
-| `get-daily-respiration`       | Respiration rate data                        |
-
-### Sleep / Body Battery / HRV
-
-| Tool               | Description                         |
-| ------------------ | ----------------------------------- |
-| `get-sleep`        | Sleep score, duration, stages, SpO2 |
-| `get-body-battery` | Body battery charged/drained values |
-| `get-hrv`          | Heart rate variability data         |
-
-### Training & Recovery
-
-| Tool                     | Description                                      |
-| ------------------------ | ------------------------------------------------ |
-| `get-training-readiness` | Training readiness score (sleep, recovery, load) |
-| `get-sleep-stats`        | Sleep statistics over a date range               |
-| `get-hydration`          | Daily hydration/water intake data                |
-
-### Weight / Records / Fitness
-
-| Tool                   | Description                           |
-| ---------------------- | ------------------------------------- |
-| `get-weight`           | Weight measurements over a date range |
-| `get-personal-records` | All personal records with history     |
-| `get-fitness-stats`    | Aggregated activity stats by type     |
-| `get-vo2max`           | Latest VO2 Max estimate               |
-| `get-hr-zones-config`  | Heart rate zone boundaries            |
-| `get-power-zones`      | Power zone config for all sports      |
-| `get-user-profile`     | User profile and settings             |
-
-### Calendar, Goals & Badges
-
-| Tool                    | Description                                 |
-| ----------------------- | ------------------------------------------- |
-| `get-calendar`          | Monthly calendar with activities and events |
-| `get-goals`             | Active, future, or past fitness goals       |
-| `get-badges`            | All earned badges/achievements              |
-| `get-badge-leaderboard` | Badge leaderboard among connections         |
-
-### Workouts
-
-| Tool                   | Description                                        |
-| ---------------------- | -------------------------------------------------- |
-| `list-workouts`        | List saved workouts                                |
-| `get-workout`          | Get workout details (steps, segments)              |
-| `create-workout`       | Create a new workout (warmup, intervals, cooldown) |
-| `schedule-workout`     | Schedule a workout to a date (syncs to device)     |
-| `delete-workout`       | Delete a workout                                   |
-| `download-workout-fit` | Download a workout as a FIT file                   |
-
-## Architecture
-
-```
-Claude Code / MCP Client
-        |
-        | MCP (stdio)
-        v
-garmin-connect-mcp server
-        |
-        | page.evaluate(fetch(...))
-        v
-Headless Playwright Chromium
-        |
-        | HTTPS (real Chrome TLS fingerprint)
-        v
-connect.garmin.com/gc-api/*
-```
-
-All API calls are made from within a headless Chromium browser context via `page.evaluate(fetch(...))`. This inherits the real Chrome TLS fingerprint, bypassing Cloudflare's detection of non-browser clients.
-
-**Auth flow**: Cookies + CSRF token are captured from a manual browser login (via the Playwright MCP server) and stored at `~/.garmin-connect-mcp/session.json`. The headless browser loads these cookies on startup.
-
-**Why not direct HTTP?** Cloudflare blocks Node.js `fetch`, Python `requests`, and even `curl` with a 403. Only requests from a real browser TLS stack are accepted.
-
-## Development
+Ordinary tests are offline and never call Garmin:
 
 ```bash
-git clone https://github.com/etweisberg/garmin-connect-mcp.git
-cd garmin-connect-mcp
-npm install
-npx playwright install chromium
-npm run build
+pnpm test
+pnpm lint
+pnpm format:check
+pnpm typecheck
+pnpm build
+git diff --check
 ```
 
-### Scripts
-
-| Command             | Description                                    |
-| ------------------- | ---------------------------------------------- |
-| `npm run build`     | Compile TypeScript                             |
-| `npm run lint`      | Run ESLint                                     |
-| `npm run format`    | Format with Prettier                           |
-| `npm run typecheck` | Type check without emitting                    |
-| `npm test`          | Run integration tests (requires valid session) |
-
-### Local Integration Testing
-
-The standalone test suite (`npm test`) requires a valid Garmin session and hits the real API. Run it locally after authenticating:
-
-```bash
-npm test
-```
-
-## Contributing
-
-1. Create a feature branch off `main`
-2. Make your changes
-3. Run checks:
-   ```bash
-   npm run lint
-   npm run format
-   npm run typecheck
-   npm run build
-   ```
-4. **Test via Claude Code**: The recommended way to verify your changes is through Claude Code. After building, call the `run-tests` MCP tool — it returns a test plan that exercises all 27 tools against the live Garmin API. Tell Claude to execute the plan and report results.
-5. Open a PR against `main`
-
-CI runs lint, format check, typecheck, and build on every PR. Integration tests run locally only (they require Garmin authentication that can't safely run in CI).
-
-### Releasing
-
-Releases are fully automated. Every merge to `main` triggers the release workflow which:
-
-1. Runs CI (lint, format, typecheck, build)
-2. Bumps the patch version
-3. Publishes to npm with provenance
-4. Creates a GitHub Release
-
-No manual version bumping or tagging needed — just merge your PR.
+See [spec.md](spec.md) for behavior and [docs/architecture.md](docs/architecture.md) for trust boundaries.
 
 ## License
 
-[AGPL-3.0](LICENSE)
+AGPL-3.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
