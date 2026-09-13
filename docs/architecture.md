@@ -1,29 +1,31 @@
 # Architecture
 
 ```text
-Codex / ChatGPT desktop / Claude
-              |
-          MCP stdio
-              |
-      seven curated tools
-              |
- preview + SHA-256 approval gates
-              |
- Playwright persistent Chromium profile
-              |
-   browser-originated /gc-api requests
-              |
-         Garmin Connect
+ChatGPT / MCP Inspector
+          |
+   HTTPS POST/GET/DELETE /mcp
+          |
+Auth0 JWT verification + owner subject binding
+          |
+  Streamable HTTP MCP sessions
+          |
+  six curated, scope-gated tools
+          |
+ explicit Garmin operation map in GarminAdapter
+          |
+ impers bearer HTTP + TLS impersonation
+          |
+    https://connectapi.garmin.com
 ```
 
-The process never listens on a TCP port. `GarminClient` launches a dedicated persistent Chrome profile under `~/.local/share/garmin-coach/browser-profile`. Runtime requests derive CSRF from the current authenticated Garmin page, refresh once on authorization failure, and never persist or log the value. A process lock prevents Codex and Claude from opening or writing through the profile concurrently.
+The same `McpServer` can run over local stdio when `MCP_TRANSPORT=stdio` or over Streamable HTTP when `MCP_TRANSPORT=streamable-http`. The Render process binds to `0.0.0.0:$PORT` and has no browser, filesystem state, persistent disk, cookie jar, CSRF state, password, or refresh-token store.
 
-The public source repository contains code and configuration examples only. Browser sessions, captured contracts, rollback snapshots, and locks remain outside the repository in owner-only local directories.
+`/healthz` is intentionally unauthenticated for Render health checks. The OAuth protected-resource document is public so ChatGPT can discover the Auth0 authorization server. Every `/mcp` request requires a valid Auth0 RS256 bearer token with the expected issuer and audience; the subject must equal `AUTH0_ALLOWED_SUBJECT`. The session is also bound to that subject, so a valid second owner cannot reuse the first owner's MCP session.
 
-GitHub CI uses Node 24 and pnpm 10.14.0, then runs the same offline install, test, lint, formatting, type, and build gates used locally.
+Read tools require `garmin:read`; the training write requires `garmin:write`. Tool metadata declares those OAuth scopes, and handlers enforce them again. Authentication failures never include the bearer token. Garmin error messages expose only method, mapped path, and status class; response bodies are not returned or logged.
 
-Training proposals are deterministic JSON. The apply path validates the approved hash, health blockers, six-hour snapshot freshness, deterministic markers, existing Garmin state, and final read-back. It creates only missing workouts and never deletes.
+Garmin routes are called through a typed client with an explicit relative-path boundary. It sends `Authorization: Bearer $GARMIN_TOKEN` to the configured HTTPS Garmin API base, uses `impers` for browser-like TLS/HTTP fingerprints, parses JSON/text/empty responses, and supports binary bodies. It does not translate arbitrary browser routes or retry writes. The raw token is read from the environment at request time and is never persisted.
 
-Profile writes are fail-closed. The capture command invokes Garmin's current app model with unchanged default zones, intercepts its `PUT`, and records proof only after abort succeeds. It validates the unchanged body and stores only the redacted request shape. Apply clones fresh zone objects, preserves unknown fields and auto flags, creates running zones only when the primary device advertises support, writes a minimal rollback summary, and verifies exact ranges through fresh profile and zone reads.
+Training proposals are deterministic JSON. The apply path validates the approved hash, health blockers, six-hour snapshot freshness, deterministic markers, existing Garmin state, and final read-back. It creates only missing workouts and never deletes. HR-profile preview remains available, but HR-profile apply is not advertised because the previous browser-captured contract cannot validate a token-only write endpoint. Unsupported operations fail closed rather than falling back to a browser.
 
-Workout payloads use Garmin's current workout-type contract. Treadmill is an activity profile beneath Running, so the incline-walk payload uses running workout compatibility and carries an explicit Treadmill launch cue.
+Render configuration is in [render.yaml](../render.yaml). Secret values are entered in Render environment settings, not Git. The service is intentionally compatible with Render's free sleep/ephemeral-storage model.

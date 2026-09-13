@@ -14,6 +14,14 @@ import {
   errorMessage,
   redactForOutput,
 } from "./safety.js";
+import {
+  authErrorResult,
+  AuthError,
+  GARMIN_READ_SCOPE,
+  GARMIN_WRITE_SCOPE,
+  getAuthConfig,
+  requireScope,
+} from "./security.js";
 import { TrainingService } from "./training-service.js";
 
 const DateSchema = z
@@ -40,6 +48,14 @@ const WRITE_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
+const READ_META = {
+  securitySchemes: [{ type: "oauth2", scopes: [GARMIN_READ_SCOPE] }],
+} as const;
+
+const WRITE_META = {
+  securitySchemes: [{ type: "oauth2", scopes: [GARMIN_WRITE_SCOPE] }],
+} as const;
+
 function today(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
 }
@@ -56,6 +72,9 @@ function jsonResult(value: unknown) {
 }
 
 function errorResult(error: unknown) {
+  if (error instanceof AuthError) {
+    return authErrorResult(error, getAuthConfig(undefined, false));
+  }
   return {
     isError: true,
     content: [{ type: "text" as const, text: errorMessage(error) }],
@@ -92,8 +111,13 @@ export function registerTools(server: McpServer): void {
         date: DateSchema.optional().describe("YYYY-MM-DD; defaults to today"),
       },
       annotations: READ_ANNOTATIONS,
+      _meta: READ_META,
     },
-    ({ date }) => result(() => adapter.getCoachingSnapshot(date ?? today()))
+    ({ date }) =>
+      result(() => {
+        requireScope(GARMIN_READ_SCOPE);
+        return adapter.getCoachingSnapshot(date ?? today());
+      })
   );
 
   server.registerTool(
@@ -102,8 +126,13 @@ export function registerTools(server: McpServer): void {
       description:
         "Return the exact five build weeks and week-six deload program.",
       annotations: READ_ANNOTATIONS,
+      _meta: READ_META,
     },
-    () => result(() => getTrainingProgram())
+    () =>
+      result(() => {
+        requireScope(GARMIN_READ_SCOPE);
+        return getTrainingProgram();
+      })
   );
 
   server.registerTool(
@@ -119,9 +148,11 @@ export function registerTools(server: McpServer): void {
         illness: z.boolean().default(false),
       },
       annotations: READ_ANNOTATIONS,
+      _meta: READ_META,
     },
     ({ weekStart, weekNumber, recoveryAction, painOrInjury, illness }) =>
       result(async () => {
+        requireScope(GARMIN_READ_SCOPE);
         const snapshot = await adapter.getCoachingSnapshot(today());
         const blockers = [
           ...(painOrInjury ? ["pain-or-injury"] : []),
@@ -163,9 +194,11 @@ export function registerTools(server: McpServer): void {
         confirmed: z.literal(true),
       },
       annotations: WRITE_ANNOTATIONS,
+      _meta: WRITE_META,
     },
     ({ canonicalProposal, hash, confirmed }) =>
       result(() => {
+        requireScope(GARMIN_WRITE_SCOPE);
         const draft = parseDraft(canonicalProposal);
         if (canonicalJson(draft) !== canonicalProposal) {
           throw new Error(
@@ -183,9 +216,13 @@ export function registerTools(server: McpServer): void {
         "Read Garmin and compare scheduled dates, managed workout steps, targets, descriptions, and IDs.",
       inputSchema: { canonicalProposal: z.string().min(1) },
       annotations: READ_ANNOTATIONS,
+      _meta: READ_META,
     },
     ({ canonicalProposal }) =>
-      result(() => training.verify(parseDraft(canonicalProposal)))
+      result(() => {
+        requireScope(GARMIN_READ_SCOPE);
+        return training.verify(parseDraft(canonicalProposal));
+      })
   );
 
   server.registerTool(
@@ -194,24 +231,13 @@ export function registerTools(server: McpServer): void {
       description:
         "Read current HR settings and return every approved before/after field, canonical proposal, and hash. Performs no Garmin writes.",
       annotations: READ_ANNOTATIONS,
+      _meta: READ_META,
     },
-    () => result(() => profile.preview())
-  );
-
-  server.registerTool(
-    "apply_hr_profile_update",
-    {
-      description:
-        "Apply one unchanged approved HR proposal through the captured Garmin browser contract, verify, and roll back on failure.",
-      inputSchema: {
-        canonicalProposal: z.string().min(1),
-        hash: z.string().regex(/^[a-f0-9]{64}$/),
-        confirmed: z.literal(true),
-      },
-      annotations: WRITE_ANNOTATIONS,
-    },
-    ({ canonicalProposal, hash, confirmed }) =>
-      result(() => profile.apply(canonicalProposal, hash, confirmed))
+    () =>
+      result(() => {
+        requireScope(GARMIN_READ_SCOPE);
+        return profile.preview();
+      })
   );
 }
 

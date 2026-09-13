@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: garmin-coach-mcp
+    runtime: node
+    plan: free
+    # Resolve impers/koffi's platform-specific native packages on the Render build image.
+    buildCommand: corepack enable && corepack prepare pnpm@10.14.0 --activate && pnpm install --no-frozen-lockfile && pnpm build
+    startCommand: pnpm start:http
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: MCP_TRANSPORT
+        value: streamable-http
+      - key: GARMIN_API_BASE_URL
+        value: https://connectapi.garmin.com
+      - key: GARMIN_TOKEN
+        sync: false
+      - key: AUTH0_ISSUER
+        sync: false
+      - key: AUTH0_AUDIENCE
+        sync: false
+      - key: AUTH0_ALLOWED_SUBJECT
+        sync: false
+      - key: MCP_PUBLIC_URL
+        sync: false
+      - key: MCP_RESOURCE_URL
+        sync: false

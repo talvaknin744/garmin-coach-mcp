@@ -1,11 +1,11 @@
 {
   "mcpServers": {
     "garmin-coach": {
-      "command": "/home/talvak/snap/code/current/.local/share/pnpm/node",
+      "command": "node",
       "args": [
-        "/home/talvak/Desktop/repos/garmin-coach-mcp/dist/index.js"
+        "/Users/idanvaknin/Desktop/vunlbilits_res/garmin-coach-mcp/dist/index.js"
       ],
-      "cwd": "/home/talvak/Desktop/repos/garmin-coach-mcp"
+      "cwd": "/Users/idanvaknin/Desktop/vunlbilits_res/garmin-coach-mcp"
     }
   }
 }

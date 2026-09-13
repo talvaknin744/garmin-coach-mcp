@@ -1,13 +1,10 @@
 [mcp_servers.garmin_coach]
-command = "/home/talvak/snap/code/current/.local/share/pnpm/node"
-args = ["/home/talvak/Desktop/repos/garmin-coach-mcp/dist/index.js"]
-cwd = "/home/talvak/Desktop/repos/garmin-coach-mcp"
+command = "node"
+args = ["/Users/idanvaknin/Desktop/vunlbilits_res/garmin-coach-mcp/dist/index.js"]
+cwd = "/Users/idanvaknin/Desktop/vunlbilits_res/garmin-coach-mcp"
 default_tools_approval_mode = "writes"
 startup_timeout_sec = 30
 tool_timeout_sec = 120
 
 [mcp_servers.garmin_coach.tools.apply_training_week]
-approval_mode = "prompt"
-
-[mcp_servers.garmin_coach.tools.apply_hr_profile_update]
 approval_mode = "prompt"

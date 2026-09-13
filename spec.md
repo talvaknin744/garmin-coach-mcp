@@ -1,24 +1,33 @@
 # Garmin Coach MCP specification
 
-## Scope
+## Scope and transports
 
-Single-user local MCP over stdio. Supported clients: Codex/ChatGPT desktop on the same host and Claude. ChatGPT web is outside scope because it cannot start a local stdio process. Source repository: `talvaknin744/garmin-coach-mcp`; CI gates install, test, lint, formatting, types, and build on `main`.
+The server supports local stdio and an Auth0-protected Streamable HTTP endpoint. Local mode is selected with `MCP_TRANSPORT=stdio`; Render uses `MCP_TRANSPORT=streamable-http` and exposes only `/mcp` plus the public health and OAuth discovery routes.
+
+The Garmin credential is a raw `GARMIN_TOKEN` environment variable. No interactive Garmin login, browser profile, cookie/CSRF state, refresh-token persistence, or browser fallback exists.
+
+## HTTP authentication
+
+- `/healthz` is public and returns a minimal healthy response.
+- `/.well-known/oauth-protected-resource` is public and advertises the Auth0 issuer, resource URL, and `garmin:read`/`garmin:write` scopes.
+- Every `/mcp` request requires an Auth0 JWT with RS256, matching `AUTH0_ISSUER`, `AUTH0_AUDIENCE`/resource, valid time claims, the exact `AUTH0_ALLOWED_SUBJECT`, and the requested scope.
+- Missing/invalid bearer tokens return `401` and `WWW-Authenticate` resource metadata. A wrong subject or scope is rejected; sessions cannot be transferred between subjects.
+- ChatGPT registration uses OAuth 2.1/PKCE through Auth0. No customer API key or static MCP auth token is supported.
 
 ## Tools
 
-Exactly seven tools:
+Exactly six validated token API tools are advertised:
 
-1. `get_coaching_snapshot`
-2. `get_training_program`
-3. `preview_training_week`
-4. `apply_training_week`
-5. `verify_training_week`
-6. `preview_hr_profile_update`
-7. `apply_hr_profile_update`
+1. `get_coaching_snapshot` — read recovery, sleep, HRV, Body Battery, resting HR, load, recent activities, HR profile, and freshness.
+2. `get_training_program` — read the exact five build weeks and week-six deload program.
+3. `preview_training_week` — read current recovery data and build a canonical week without writing.
+4. `apply_training_week` — create, schedule, and verify one unchanged approved week; requires a canonical proposal, SHA-256 hash, `confirmed: true`, and `garmin:write`.
+5. `verify_training_week` — read Garmin and compare dates, managed steps, targets, descriptions, and IDs.
+6. `preview_hr_profile_update` — read current HR settings and return a canonical proposed update without writing.
 
-Only the two `apply_*` tools write Garmin data. Both require `confirmed: true`, an unchanged canonical proposal, and its SHA-256 hash.
+The HR-profile write tool is omitted. The old browser-captured `PUT` contract is not evidence for a direct token API route, so this operation is fail-closed and has no browser fallback.
 
-## Heart-rate profile
+## Heart-rate profile proposal
 
 - Maximum: 189 bpm
 - Resting: 55 bpm
@@ -27,20 +36,12 @@ Only the two `apply_*` tools write Garmin data. Both require `confirmed: true`, 
 - Zones: 122-134, 135-149, 150-162, 163-176, 177-189 bpm
 - Scopes: default and running; walking-specific when Garmin exposes it, otherwise default inheritance
 - Existing automatic-detection flags remain unchanged
-- Provenance is provisional: age 27, resting HR 55, estimated max 189, manual LTHR 181
-
-Profile apply requires a locally captured unchanged-save request from Garmin's current app model. Capture records proof only after the request abort succeeds, so nothing reaches Garmin, and stores only its redacted shape. Unknown fields are cloned from the latest reads. The single changed-sports write is read back; mismatch or uncertain delivery triggers rollback, and unproven restoration returns `uncertain`.
+- Provenance is provisional: age 27, resting HR 55, estimated max HR 189, manual LTHR 181
 
 ## Training
 
 Sunday Pull; Monday 30-40 minute run at 135-149 bpm; Tuesday Push; Wednesday rest; Thursday Support; Friday 35-50 minute fixed 12% incline walk at 135-149 bpm; Saturday rest. Weeks 1-5 repeat. Week 6 halves work, shortens handstands, removes heavy negative pull-ups, uses one assistance set, and shortens cardio by one third.
 
-Cardio uses exact `targetValueOne: 135` and `targetValueTwo: 149`; `zoneNumber` is forbidden. Friday tells the athlete to change speed only and stop if HR remains above 149 at minimum safe walking speed. No warm-up, cooldown, or weight is invented.
+Cardio uses exact `targetValueOne: 135` and `targetValueTwo: 149`; `zoneNumber` is forbidden. Friday tells the athlete to change speed only and stop if HR remains above 149 at minimum safe walking speed. Garmin models Treadmill as a running activity profile, so Friday uses workout sport `running` and explicitly tells the athlete to launch it from the watch's Treadmill activity.
 
-Garmin models Treadmill as a running activity profile, not a structured-workout sport. Friday therefore uses workout sport `running` and explicitly tells the athlete to launch it from the watch's Treadmill activity.
-
-Writes are marker-based and idempotent. Exact existing workouts are no-ops; unscheduled matches are scheduled; changed payloads conflict; no deletion occurs.
-
-## Privacy and safety
-
-Persistent Chromium profile is local, owner-only, and guarded by one filesystem lock. Password saving is disabled. No username/password file exists. Tool output excludes identity, GPS, session material, and raw profile responses. A pain/injury or illness flag blocks workout writes. Recovery may keep, reduce, or skip load, never increase it.
+Writes are marker-based and idempotent. Exact existing workouts are no-ops; unscheduled matches are scheduled; changed payloads conflict; no deletion occurs. Pain/injury or illness blocks workout writes, and recovery can keep, reduce, or skip load but never increase it.

@@ -1,110 +1,73 @@
-# Local Garmin Coach MCP
+# Garmin Coach MCP
 
-Private, single-user Garmin coaching tools for Codex/ChatGPT desktop and Claude. The server is local stdio only: no Cloudflare, Render, public URL, account service, or hosting cost.
+Private Garmin coaching tools exposed through local stdio or an Auth0-protected Streamable HTTP MCP service. The deployed service is intended for one owner: Auth0 authenticates the ChatGPT connection and `AUTH0_ALLOWED_SUBJECT` rejects every other user.
 
-The runtime is based on [`etweisberg/garmin-connect-mcp`](https://github.com/etweisberg/garmin-connect-mcp) at commit `87d0ea059fb67f1ce65ac05100df74c3c3777c84`. It keeps the upstream AGPL-3.0 license and Taxuspt attribution in [NOTICE](NOTICE).
+The Garmin side uses a raw `GARMIN_TOKEN` from the environment and browserless HTTP through [`impers`](https://github.com/lexiforest/impers), which provides curl-impersonate TLS/HTTP fingerprints. No Playwright, browser profile, cookies, CSRF state, password, or refresh-token persistence is used.
 
-## Prerequisites
+The project preserves the upstream AGPL-3.0 license and attribution in [NOTICE](NOTICE).
 
-- Node.js 20 or newer
-- pnpm 10.14.0
-- A Garmin Connect account and synced watch
+## Local setup
 
-## Install
+Prerequisites: Node.js 20+, pnpm 10.14.0, a Garmin Connect access token, and a synced watch.
 
 ```bash
-cd /home/talvak/Desktop/repos/garmin-coach-mcp
-pnpm install --frozen-lockfile
-pnpm exec playwright install chromium
+cd /Users/idanvaknin/Desktop/vunlbilits_res/garmin-coach-mcp
+pnpm install
 pnpm build
-pnpm auth
+GARMIN_TOKEN='…' MCP_TRANSPORT=stdio pnpm start
 ```
 
-`pnpm auth` opens a dedicated visible Chrome profile. Log in manually, complete MFA, then press Enter in the terminal. The browser session stays under `~/.local/share/garmin-coach/browser-profile`. Runtime CSRF values are read from the current authenticated page and never persisted or printed. Directories are `0700`, files are `0600`, password saving is disabled, and no username/password file is created.
+Never commit or print the token. Rotate it manually when Garmin expires or revokes it. For local development, copy [.env.example](.env.example) to a private environment manager and fill in the values without committing the file.
 
-## Capture Garmin's profile-write contract
+## Render deployment
 
-Garmin does not publish a stable heart-rate profile write API. The server refuses to guess it.
+The repository includes [render.yaml](render.yaml) for a free Node web service. In Render, create the Blueprint from the `render-token-auth` branch, then set the secret and Auth0 environment values in the service settings. Render supplies `PORT`; the server binds to `0.0.0.0` and serves:
 
-```bash
-pnpm capture:profile-contract
+| Route | Access | Purpose |
+| --- | --- | --- |
+| `GET /healthz` | Public | Render health check only |
+| `GET /.well-known/oauth-protected-resource` | Public | OAuth resource metadata |
+| `POST/GET/DELETE /mcp` | Auth0 bearer token required | Streamable HTTP MCP |
+
+Required Render values:
+
+```text
+GARMIN_TOKEN=<raw Garmin access token>
+GARMIN_API_BASE_URL=https://connectapi.garmin.com
+AUTH0_ISSUER=https://<tenant>.auth0.com/
+AUTH0_AUDIENCE=https://<render-host>/mcp
+AUTH0_ALLOWED_SUBJECT=<your Auth0 subject>
+MCP_PUBLIC_URL=https://<render-host>
+MCP_RESOURCE_URL=https://<render-host>/mcp
+MCP_TRANSPORT=streamable-http
 ```
 
-The command loads Garmin's current app model, asks it to save the unchanged current default zones, and blocks the resulting `PUT` before delivery. It validates the route and exact unchanged body, then stores only a redacted method/path/field shape and supported scopes in `~/.local/state/garmin-coach/profile-write-contract.json` with mode `0600`.
+`MCP_RESOURCE_URL` and `AUTH0_AUDIENCE` must be the exact same URL. Configure the Auth0 API with that identifier, RS256 signing, and the `garmin:read` and `garmin:write` scopes. Allow only your Auth0 subject in `AUTH0_ALLOWED_SUBJECT`. Use Auth0 manual registration or CIMD, and paste the exact ChatGPT redirect URI shown during connector setup into Auth0. ChatGPT uses OAuth 2.1 with PKCE; do not add a static customer API key or `MCP_AUTH_TOKEN`.
 
-If Garmin's shape cannot be proven, no contract is saved and profile writes remain disabled.
+Render free services sleep when idle and use ephemeral storage. This service intentionally stores no runtime Garmin state or persistent disk data.
 
-## Connect Codex and ChatGPT desktop
+## Connect ChatGPT
 
-Build first, then copy [config/codex.toml.example](config/codex.toml.example) into `~/.codex/config.toml`, or add the equivalent server through ChatGPT desktop Settings > MCP servers. Codex CLI, the IDE extension, and ChatGPT desktop share local MCP configuration on the same host.
+After the Render service is live, add its MCP URL (`https://<render-host>/mcp`) as a custom connector in ChatGPT Developer Mode. Complete the Auth0 OAuth flow and approve the requested scopes. If custom connectors or write actions are unavailable under the account/workspace policy, the service remains protected and correct, but ChatGPT must first enable those capabilities.
 
-The example uses:
-
-```toml
-default_tools_approval_mode = "writes"
-```
-
-Both apply tools also have explicit `approval_mode = "prompt"`. Restart the client after configuration and use `/mcp` to verify connection.
-
-ChatGPT web cannot start this local stdio process. Use ChatGPT desktop/Codex for Garmin writes.
-
-## Connect Claude
-
-Merge [config/claude.json.example](config/claude.json.example) into Claude's MCP configuration, or run:
-
-```bash
-claude mcp add garmin-coach -- /home/talvak/snap/code/current/.local/share/pnpm/node /home/talvak/Desktop/repos/garmin-coach-mcp/dist/index.js
-```
-
-The filesystem lock permits only one local client to own the Garmin Chromium profile at a time. Stop the server in one client before using the other.
+Before enabling writes, validate read-only calls with the real token using MCP Inspector and a test ChatGPT conversation. Test direct reads, follow-ups, an expired/invalid token, a non-owner subject, and missing scopes. Keep `apply_training_week` disabled until those checks pass.
 
 ## Tools
 
-| Tool | Garmin write |
-| --- | --- |
-| `get_coaching_snapshot` | No |
-| `get_training_program` | No |
-| `preview_training_week` | No |
-| `apply_training_week` | Yes, approval required |
-| `verify_training_week` | No |
-| `preview_hr_profile_update` | No |
-| `apply_hr_profile_update` | Yes, separate approval required |
+Only token-backed and explicitly mapped operations are advertised:
 
-## Safe workflow
+| Tool | Scope | Garmin write |
+| --- | --- | --- |
+| `get_coaching_snapshot` | `garmin:read` | No |
+| `get_training_program` | `garmin:read` | No |
+| `preview_training_week` | `garmin:read` | No |
+| `apply_training_week` | `garmin:write` | Yes, confirmation required |
+| `verify_training_week` | `garmin:read` | No |
+| `preview_hr_profile_update` | `garmin:read` | No |
 
-1. Call `get_coaching_snapshot` and compare it with Garmin Connect.
-2. Call `preview_hr_profile_update`.
-3. Review every field and approve the exact canonical proposal/hash.
-4. Call `apply_hr_profile_update`; then sync Garmin and visually verify watch zones.
-5. Call `preview_training_week` for one Sunday-starting week.
-6. Review its recovery evidence, complete payload, warnings, and hash.
-7. Call `apply_training_week` with the unchanged canonical proposal/hash.
-8. Call `verify_training_week` and confirm Monday/Friday are `135-149 bpm`; Friday must display fixed `12%` instructions.
-9. Retry both apply calls to prove idempotency.
+The HR-profile write tool is deliberately omitted: the old browser-captured write contract is not valid proof for a token-only client. There is no browser fallback. Training writes remain preview-first, hash-bound, idempotent, and never delete workouts. Pain/injury or illness blocks workout writes.
 
-Pain/injury or illness blocks workout writes. Recovery can keep, reduce, or skip; it never increases load. Workouts are never deleted automatically.
-
-Garmin exposes Treadmill as a watch activity beneath Running, not as a structured-workout sport. Friday is therefore a running-compatible workout named `Incline Walk 12%`; start it from the watch's Treadmill activity. Its `12%` incline cue and `135-149 bpm` target remain explicit.
-
-## Approved HR profile
-
-| Field | Value |
-| --- | --- |
-| Maximum HR | 189 bpm |
-| Resting HR | 55 bpm |
-| Lactate threshold HR | 181 bpm |
-| Basis | Heart-rate reserve/custom BPM |
-| Zone 1 | 122-134 bpm |
-| Zone 2 | 135-149 bpm |
-| Zone 3 | 150-162 bpm |
-| Zone 4 | 163-176 bpm |
-| Zone 5 | 177-189 bpm |
-
-These values are provisional: age 27, resting HR 55, estimated max HR 189, and manual LTHR 181. Automatic-detection flags are preserved. Future changes require another preview and approval.
-
-## Verification
-
-Ordinary tests are offline and never call Garmin:
+## Checks
 
 ```bash
 pnpm test
@@ -114,6 +77,8 @@ pnpm typecheck
 pnpm build
 git diff --check
 ```
+
+The client maps Garmin 401, 403, 429, and 5xx responses to safe messages without response-body or token leakage. JSON, empty, text, and binary responses are handled without logging credentials.
 
 See [spec.md](spec.md) for behavior and [docs/architecture.md](docs/architecture.md) for trust boundaries.
 

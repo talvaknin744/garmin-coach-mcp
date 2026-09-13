@@ -1,220 +1,254 @@
-import { existsSync } from "node:fs";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import * as impers from "impers";
 
-import {
-  ensurePrivateDir,
-  hardenTree,
-  LOCAL_PATHS,
-  ProcessLock,
-} from "./local-state.js";
+const DEFAULT_API_BASE_URL = "https://connectapi.garmin.com";
+const DEFAULT_TIMEOUT_SECONDS = 30;
+const DEFAULT_IMPERSONATE = "chrome";
+const MAX_PATH_LENGTH = 512;
 
-export type GarminMethod = "GET" | "POST" | "PUT" | "PATCH";
+export type GarminMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
-const BASE_URL = "https://connect.garmin.com/app/";
-const STATIC_URL =
-  "https://connect.garmin.com/site-status/garmin-connect-status.json";
-const API_PATH = /^[A-Za-z0-9][A-Za-z0-9/_-]*\/?$/;
-const SESSION_CHECK = "userprofile-service/userprofile/user-settings/";
+export type GarminRequestOptions = {
+  headers: Record<string, string>;
+  params?: Record<string, string | number | boolean>;
+  json?: unknown;
+  impersonate: string;
+  timeout: number;
+};
 
-function browserEnvironment(headless: boolean) {
-  if (headless || process.env.DISPLAY) return process.env;
-  const uid = process.getuid?.();
-  const display = existsSync("/tmp/.X11-unix/X1") ? ":1" : ":0";
-  return {
-    ...process.env,
-    DISPLAY: display,
-    ...(uid === undefined
-      ? {}
-      : {
-          XAUTHORITY: `/run/user/${uid}/gdm/Xauthority`,
-          DBUS_SESSION_BUS_ADDRESS: `unix:path=/run/user/${uid}/bus`,
-        }),
-  };
-}
+export type GarminResponse = {
+  status: number;
+  text: string;
+  content: Buffer;
+};
 
-export async function waitForGarminSession(page: Page): Promise<string> {
-  await page.goto(BASE_URL, { waitUntil: "domcontentloaded" });
-  const deadline = Date.now() + 30_000;
-  while (Date.now() < deadline) {
-    const status = await page.evaluate(async (path) => {
-      const csrf = document
-        .querySelector('meta[name="csrf-token"]')
-        ?.getAttribute("content");
-      if (!csrf) return 0;
-      return fetch(`/gc-api/${path}`, {
-        credentials: "include",
-        headers: { "connect-csrf-token": csrf, Accept: "*/*" },
-      }).then((response) => response.status);
-    }, SESSION_CHECK);
-    if (status === 200) {
-      const csrf = await page
-        .locator('meta[name="csrf-token"]')
-        .getAttribute("content");
-      if (csrf) return csrf;
-    }
-    await page.waitForTimeout(500);
+export type GarminRequester = (
+  method: GarminMethod,
+  url: string,
+  options: GarminRequestOptions
+) => Promise<GarminResponse>;
+
+export type GarminClientOptions = {
+  token?: string;
+  baseUrl?: string;
+  timeoutSeconds?: number;
+  impersonate?: string;
+  requester?: GarminRequester;
+};
+
+export class GarminApiError extends Error {
+  constructor(
+    readonly method: GarminMethod,
+    readonly path: string,
+    readonly status: number
+  ) {
+    super(messageForStatus(method, path, status));
+    this.name = "GarminApiError";
   }
-  throw new Error(
-    "Garmin session missing, expired, or not ready; run pnpm auth"
-  );
 }
 
-export function validApiPath(path: string): string {
-  const normalized = path.replace(/^\/+/, "");
-  if (!API_PATH.test(normalized) || normalized.includes("..")) {
-    throw new Error("Invalid Garmin API path");
-  }
-  return normalized;
+function requiredToken(token = process.env.GARMIN_TOKEN): string {
+  const value = token?.trim();
+  if (!value)
+    throw new Error("Missing required environment variable: GARMIN_TOKEN");
+  return value;
 }
 
-export async function launchGarminContext(headless: boolean) {
-  const lock = await ProcessLock.acquire();
+function apiBaseUrl(value = process.env.GARMIN_API_BASE_URL): string {
+  const candidate = (value?.trim() || DEFAULT_API_BASE_URL).replace(/\/+$/, "");
+  let parsed: URL;
   try {
-    await ensurePrivateDir(LOCAL_PATHS.browserProfile);
-    await hardenTree(LOCAL_PATHS.browserProfile);
-    const context = await chromium.launchPersistentContext(
-      LOCAL_PATHS.browserProfile,
-      {
-        channel: "chrome",
-        headless,
-        env: browserEnvironment(headless),
-        ignoreDefaultArgs: ["--enable-automation"],
-        viewport: { width: 1440, height: 1000 },
-        args: [
-          "--disable-blink-features=AutomationControlled",
-          "--disable-save-password-bubble",
-          "--disable-features=AutofillEnableAccountWalletStorage,AutofillServerCommunication,PasswordManagerOnboarding,PasswordLeakDetection",
-        ],
-      }
-    );
-    return { context, lock };
-  } catch (error) {
-    await lock.release();
-    throw error;
+    parsed = new URL(candidate);
+  } catch {
+    throw new Error("GARMIN_API_BASE_URL must be a valid HTTPS URL");
   }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.hash
+  ) {
+    throw new Error("GARMIN_API_BASE_URL must be a valid HTTPS URL");
+  }
+  return parsed.toString().replace(/\/+$/, "");
+}
+
+function timeoutSeconds(
+  value = process.env.GARMIN_HTTP_TIMEOUT_SECONDS
+): number {
+  if (!value?.trim()) return DEFAULT_TIMEOUT_SECONDS;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 120) {
+    throw new Error("GARMIN_HTTP_TIMEOUT_SECONDS must be between 1 and 120");
+  }
+  return parsed;
+}
+
+function messageForStatus(
+  method: GarminMethod,
+  path: string,
+  status: number
+): string {
+  const request = `${method} ${path}`;
+  if (status === 401)
+    return `${request} failed: GARMIN_TOKEN was rejected or has expired`;
+  if (status === 403) return `${request} failed: Garmin denied this request`;
+  if (status === 429) return `${request} failed: Garmin rate limit reached`;
+  if (status >= 500)
+    return `${request} failed: Garmin API is temporarily unavailable`;
+  return `${request} failed with HTTP ${status}`;
+}
+
+function defaultRequester(
+  method: GarminMethod,
+  url: string,
+  options: GarminRequestOptions
+): Promise<GarminResponse> {
+  return impers
+    .request(method, url, options as Parameters<typeof impers.request>[2])
+    .then((response) => ({
+      status: response.status,
+      text: response.text,
+      content: Buffer.from(response.content),
+    }));
+}
+
+function validApiPath(path: string): string {
+  if (
+    !path ||
+    path.length > MAX_PATH_LENGTH ||
+    path.startsWith("/") ||
+    path.includes("//")
+  ) {
+    throw new Error(
+      "Garmin API path must be a short relative allowlisted path"
+    );
+  }
+  const parsed = new URL(path, "https://garmin.invalid");
+  if (
+    parsed.origin !== "https://garmin.invalid" ||
+    parsed.pathname.slice(1) !== path.split("?")[0]
+  ) {
+    throw new Error("Garmin API path must be relative");
+  }
+  if (
+    parsed.pathname
+      .split("/")
+      .some((segment) => segment === ".." || segment === ".")
+  ) {
+    throw new Error("Garmin API path traversal is not allowed");
+  }
+  return path;
+}
+
+function splitPath(path: string): {
+  pathname: string;
+  params: Record<string, string>;
+} {
+  const parsed = new URL(path, "https://garmin.invalid");
+  const params: Record<string, string> = {};
+  parsed.searchParams.forEach((value, key) => {
+    params[key] = value;
+  });
+  return { pathname: parsed.pathname, params };
+}
+
+function parsedResponse(
+  response: GarminResponse,
+  method: GarminMethod,
+  path: string
+): unknown {
+  if (response.status < 200 || response.status >= 300) {
+    throw new GarminApiError(method, path, response.status);
+  }
+  if (!response.text.trim()) return null;
+  try {
+    return JSON.parse(response.text) as unknown;
+  } catch {
+    return response.text;
+  }
+}
+
+export function assertGarminConfig(env: NodeJS.ProcessEnv = process.env): void {
+  requiredToken(env.GARMIN_TOKEN);
+  apiBaseUrl(env.GARMIN_API_BASE_URL);
+  timeoutSeconds(env.GARMIN_HTTP_TIMEOUT_SECONDS);
 }
 
 export class GarminClient {
-  private context: BrowserContext | null = null;
-  private page: Page | null = null;
-  private lock: ProcessLock | null = null;
-  private csrfToken: string | null = null;
-  private initPromise: Promise<Page> | null = null;
+  private readonly token?: string;
+  private readonly baseUrl?: string;
+  private readonly timeout?: number;
+  private readonly impersonate: string;
+  private readonly requester: GarminRequester;
 
-  private async init(): Promise<Page> {
-    if (this.page) return this.page;
-    this.initPromise ??= this.start();
-    try {
-      return await this.initPromise;
-    } finally {
-      this.initPromise = null;
-    }
-  }
-
-  private async start(): Promise<Page> {
-    const launched = await launchGarminContext(true);
-    this.context = launched.context;
-    this.lock = launched.lock;
-    this.page = this.context.pages()[0] ?? (await this.context.newPage());
-    try {
-      this.csrfToken = await waitForGarminSession(this.page);
-      await this.page.goto(STATIC_URL, { waitUntil: "domcontentloaded" });
-    } catch (error) {
-      await this.close();
-      throw error;
-    }
-    return this.page;
+  constructor(options: GarminClientOptions = {}) {
+    this.token = options.token?.trim() || undefined;
+    this.baseUrl = options.baseUrl ? apiBaseUrl(options.baseUrl) : undefined;
+    this.timeout = options.timeoutSeconds;
+    this.impersonate =
+      options.impersonate ||
+      process.env.GARMIN_IMPERSONATE ||
+      DEFAULT_IMPERSONATE;
+    this.requester = options.requester || defaultRequester;
   }
 
   async get(
     path: string,
     params: Record<string, string | number | boolean> = {}
   ): Promise<unknown> {
-    const query = new URLSearchParams(
-      Object.entries(params).map(([key, value]) => [key, String(value)])
-    );
-    const suffix = query.size ? `?${query.toString()}` : "";
-    return this.request("GET", `${validApiPath(path)}${suffix}`);
+    return this.request("GET", path, undefined, params);
+  }
+
+  async getBytes(
+    path: string,
+    params: Record<string, string | number | boolean> = {}
+  ): Promise<Buffer> {
+    const response = await this.send("GET", path, undefined, params);
+    if (response.status < 200 || response.status >= 300) {
+      throw new GarminApiError("GET", path, response.status);
+    }
+    return response.content;
   }
 
   async request(
     method: GarminMethod,
-    pathWithQuery: string,
-    body?: unknown
+    path: string,
+    body?: unknown,
+    params: Record<string, string | number | boolean> = {}
   ): Promise<unknown> {
-    const [path, query = ""] = pathWithQuery.split("?", 2);
-    const endpoint = `${validApiPath(path)}${query ? `?${query}` : ""}`;
-    const page = await this.init();
-    let result = await this.send(page, method, endpoint, body);
-    if (result.status === 401 || result.status === 403) {
-      this.csrfToken = await waitForGarminSession(page);
-      await page.goto(STATIC_URL, { waitUntil: "domcontentloaded" });
-      result = await this.send(page, method, endpoint, body);
-    }
-    if (!result.ok) {
-      if (result.status === 401 || result.status === 403) await this.close();
-      throw new Error(
-        `Garmin request failed: ${method} ${path} returned HTTP ${result.status}`
-      );
-    }
-    return result.data;
-  }
-
-  private async send(
-    page: Page,
-    method: GarminMethod,
-    endpoint: string,
-    body?: unknown
-  ) {
-    const csrf = this.csrfToken;
-    if (!csrf) throw new Error("Garmin session missing; run pnpm auth");
-    return page.evaluate(
-      async ({ requestMethod, requestPath, requestBody, csrfToken }) => {
-        const headers: Record<string, string> = {
-          Accept: requestMethod === "GET" ? "*/*" : "application/json, */*",
-          "connect-csrf-token": csrfToken,
-        };
-        if (requestBody !== undefined)
-          headers["Content-Type"] = "application/json";
-        const response = await fetch(`/gc-api/${requestPath}`, {
-          method: requestMethod,
-          credentials: "include",
-          headers,
-          ...(requestBody === undefined
-            ? {}
-            : { body: JSON.stringify(requestBody) }),
-        });
-        const text = await response.text();
-        let data: unknown = null;
-        if (text) {
-          try {
-            data = JSON.parse(text);
-          } catch {
-            data = null;
-          }
-        }
-        return { ok: response.ok, status: response.status, data };
-      },
-      {
-        requestMethod: method,
-        requestPath: endpoint,
-        requestBody: body,
-        csrfToken: csrf,
-      }
-    );
+    const response = await this.send(method, path, body, params);
+    return parsedResponse(response, method, path);
   }
 
   async close(): Promise<void> {
-    const context = this.context;
-    const lock = this.lock;
-    this.context = null;
-    this.page = null;
-    this.lock = null;
-    this.csrfToken = null;
-    this.initPromise = null;
-    await context?.close().catch(() => undefined);
-    await hardenTree(LOCAL_PATHS.browserProfile).catch(() => undefined);
-    await lock?.release();
+    // The stateless impers request API has no browser/session resources to close.
+  }
+
+  private async send(
+    method: GarminMethod,
+    rawPath: string,
+    body: unknown,
+    params: Record<string, string | number | boolean>
+  ): Promise<GarminResponse> {
+    const path = validApiPath(rawPath);
+    const { pathname, params: pathParams } = splitPath(path);
+    const token = requiredToken(this.token);
+    const baseUrl = this.baseUrl || apiBaseUrl();
+    const url = new URL(`${baseUrl}${pathname}`);
+    const mergedParams = { ...pathParams, ...params };
+    Object.entries(mergedParams).forEach(([key, value]) => {
+      url.searchParams.set(key, String(value));
+    });
+    const options: GarminRequestOptions = {
+      headers: {
+        Accept: "application/json, application/octet-stream;q=0.9",
+        Authorization: `Bearer ${token}`,
+      },
+      impersonate: this.impersonate,
+      timeout: this.timeout || timeoutSeconds(),
+    };
+    if (body !== undefined) options.json = body;
+    return this.requester(method, url.toString(), options);
   }
 }
 
@@ -226,7 +260,6 @@ export function getClient(): GarminClient {
 }
 
 export async function closeClient(): Promise<void> {
-  const client = shared;
+  await shared?.close();
   shared = null;
-  await client?.close();
 }

@@ -1,10 +1,7 @@
 import type { GarminWorkoutTransport } from "./training-service.js";
-import type {
-  ProfileWriteMethod,
-  ProfileWriteTransport,
-  RawProfile,
-} from "./profile.js";
-import { GarminClient } from "./garmin-client.js";
+import type { RawProfile } from "./profile.js";
+import { assertGarminConfig, GarminClient } from "./garmin-client.js";
+import { GarminRoutes } from "./garmin-routes.js";
 import { normalizeProfile } from "./profile.js";
 import { errorMessage, redactForOutput } from "./safety.js";
 
@@ -124,50 +121,47 @@ async function settled(name: string, promise: Promise<unknown>) {
   }
 }
 
-export class GarminAdapter
-  implements GarminWorkoutTransport, ProfileWriteTransport
-{
+export class GarminAdapter implements GarminWorkoutTransport {
   constructor(private readonly client = new GarminClient()) {}
 
   async getRawProfile(): Promise<RawProfile> {
     const [profile, zones] = await Promise.all([
-      this.client.get("userprofile-service/userprofile/user-settings/"),
-      this.client.get("biometric-service/heartRateZones/"),
+      this.client.get(GarminRoutes.profile),
+      this.client.get(GarminRoutes.heartRateZones),
     ]);
     return { profile, zones };
   }
 
   async getCoachingSnapshot(date: string) {
+    assertGarminConfig();
     const sources = await Promise.all([
       settled(
         "trainingReadiness",
-        this.client.get(`metrics-service/metrics/trainingreadiness/${date}`)
+        this.client.get(GarminRoutes.trainingReadiness(date))
       ),
       settled(
         "trainingLoad",
-        this.client.get(
-          `metrics-service/metrics/trainingstatus/aggregated/${date}`
-        )
+        this.client.get(GarminRoutes.trainingStatus(date))
       ),
       settled(
         "sleep",
-        this.client.get("sleep-service/sleep/dailySleepData", {
+        this.client.get(GarminRoutes.sleep, {
           date,
           nonSleepBufferMinutes: 60,
         })
       ),
       settled(
         "bodyBattery",
-        this.client.get("wellness-service/wellness/bodyBattery/messagingToday")
+        this.client.get(GarminRoutes.bodyBattery)
       ),
-      settled("hrv", this.client.get(`hrv-service/hrv/${date}`)),
+      settled("hrv", this.client.get(GarminRoutes.hrv(date))),
       settled(
         "heartRate",
-        this.client.get("wellness-service/wellness/dailyHeartRate", { date })
+        this.client.get(GarminRoutes.dailyHeartRate, { date })
       ),
       settled(
         "activities",
-        this.client.get("activitylist-service/activities/search/activities", {
+        this.client.get(GarminRoutes.activities, {
           start: 0,
           limit: 10,
         })
@@ -221,7 +215,7 @@ export class GarminAdapter
     const workouts: Record<string, unknown>[] = [];
     for (let start = 0; start < 10_000; start += 100) {
       const page = array(
-        await this.client.get("workout-service/workouts", { start, limit: 100 })
+        await this.client.get(GarminRoutes.workouts, { start, limit: 100 })
       );
       workouts.push(...page);
       if (page.length < 100) break;
@@ -233,14 +227,14 @@ export class GarminAdapter
 
   async createWorkout(payload: Record<string, unknown>) {
     return record(
-      await this.client.request("POST", "workout-service/workout", payload)
+      await this.client.request("POST", GarminRoutes.workout, payload)
     );
   }
 
   async scheduleWorkout(workoutId: number, date: string) {
     return this.client.request(
       "POST",
-      `workout-service/schedule/${workoutId}`,
+      GarminRoutes.scheduleWorkout(workoutId),
       { date }
     );
   }
@@ -248,7 +242,7 @@ export class GarminAdapter
   async isWorkoutScheduled(workoutId: number, date: string) {
     const parsed = new Date(`${date}T00:00:00.000Z`);
     const calendar = await this.client.get(
-      `calendar-service/year/${parsed.getUTCFullYear()}/month/${parsed.getUTCMonth()}`
+      GarminRoutes.calendar(parsed.getUTCFullYear(), parsed.getUTCMonth())
     );
     return objectContainsSchedule(calendar, workoutId, date);
   }
@@ -256,7 +250,7 @@ export class GarminAdapter
   async getWorkoutSchedules(year: number) {
     const calendars = await Promise.all(
       Array.from({ length: 12 }, (_, month) =>
-        this.client.get(`calendar-service/year/${year}/month/${month}`)
+        this.client.get(GarminRoutes.calendar(year, month))
       )
     );
     const schedules: { workoutId: number; date: string }[] = [];
@@ -273,12 +267,8 @@ export class GarminAdapter
 
   async getWorkout(workoutId: number) {
     return record(
-      await this.client.get(`workout-service/workout/${workoutId}`)
+      await this.client.get(`${GarminRoutes.workout}/${workoutId}`)
     );
-  }
-
-  async request(method: ProfileWriteMethod, path: string, body: unknown) {
-    return this.client.request(method, path, body);
   }
 
   async close(): Promise<void> {

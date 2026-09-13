@@ -1,7 +1,7 @@
 {
   "name": "garmin-coach-mcp",
   "version": "0.1.0",
-  "description": "Local, approval-gated Garmin coaching MCP",
+  "description": "Authenticated Garmin coaching MCP for stdio and Streamable HTTP",
   "private": true,
   "packageManager": "pnpm@10.14.0",
   "type": "module",
@@ -17,8 +17,7 @@
   "scripts": {
     "build": "tsc && chmod 755 dist/index.js",
     "start": "node dist/index.js",
-    "auth": "pnpm build && node dist/index.js auth",
-    "capture:profile-contract": "pnpm build && node dist/index.js capture-profile-contract",
+    "start:http": "node dist/index.js http",
     "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/**/*.test.js",
     "lint": "eslint .",
     "format": "prettier --write src/ test/",
@@ -27,7 +26,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.0",
-    "playwright": "1.62.1",
+    "impers": "0.1.2",
+    "jose": "6.2.9",
     "zod": "3.25.76"
   },
   "devDependencies": {

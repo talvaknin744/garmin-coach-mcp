@@ -1,44 +1,42 @@
 #!/usr/bin/env node
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
-import { runAuth } from "./auth.js";
-import { captureProfileContract } from "./profile-contract.js";
-import { closeRuntime, registerTools } from "./tools.js";
+import { closeHttpServer, startHttpServer } from "./http.js";
+import { createMcpServer } from "./mcp-server.js";
+import { errorMessage } from "./safety.js";
+import { closeRuntime } from "./tools.js";
 
 process.umask(0o077);
 
-async function startMcpServer(): Promise<void> {
-  const server = new McpServer(
-    { name: "garmin-coach-mcp", version: "0.1.0" },
-    {
-      instructions:
-        "Always preview before apply. Pass canonical proposals and hashes unchanged. Profile and training writes need separate user approvals. Never write workouts when pain, injury, or illness is reported. Never increase recovery load or delete Garmin data.",
-    }
-  );
-  registerTools(server);
+async function startStdioServer(): Promise<void> {
+  const server = createMcpServer();
   process.stdin.resume();
   await server.connect(new StdioServerTransport());
   console.error("garmin-coach-mcp running on local stdio");
 }
 
 async function main(): Promise<void> {
-  const command = process.argv[2];
-  if (command === "auth") return runAuth();
-  if (command === "capture-profile-contract") return captureProfileContract();
-  if (command) throw new Error(`Unknown command: ${command}`);
-  return startMcpServer();
+  if (process.argv[2] === "http" || process.env.MCP_TRANSPORT === "streamable-http") {
+    await startHttpServer();
+    return;
+  }
+  if (process.argv[2]) throw new Error(`Unknown command: ${process.argv[2]}`);
+  await startStdioServer();
 }
 
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
-    void closeRuntime().finally(() => process.exit(0));
+    void closeHttpServer()
+      .catch(() => undefined)
+      .finally(() => closeRuntime())
+      .finally(() => process.exit(0));
   });
 }
 
 main().catch(async (error: unknown) => {
-  console.error(error instanceof Error ? error.message : "Fatal error");
+  console.error(errorMessage(error));
+  await closeHttpServer().catch(() => undefined);
   await closeRuntime();
   process.exitCode = 1;
 });

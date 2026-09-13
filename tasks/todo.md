@@ -1,34 +1,21 @@
-# Garmin Coach MCP
+# Garmin Coach MCP deployment checklist
 
-- [x] Verify upstream repository, branch, remote, dirty state, and pin.
-- [x] Add offline contract tests.
-- [x] Implement dedicated-profile browser client and process lock.
-- [x] Implement seven curated MCP tools.
-- [x] Implement exact six-week program and custom-BPM workouts.
-- [x] Implement profile preview/apply with captured contract and rollback.
-- [x] Add setup, security, architecture, and client configuration docs.
-- [x] Fix independent review findings and rerun offline tests.
-- [x] Verify authenticated Garmin reads.
-- [x] Capture and verify current profile-write contract.
-- [x] Preview, approve, apply, and verify HR profile.
-- [x] Preview, approve, create, schedule, and verify one live week.
-- [x] Retry workout apply and prove idempotency; profile retry verified no-op.
-- [x] Run final gates.
-- [x] Publish GitHub repository and verify remote/CI.
+- [x] Create the requested checkout and `render-token-auth` branch.
+- [x] Replace Playwright, browser profiles, cookies, CSRF, and interactive login with raw `GARMIN_TOKEN` API access.
+- [x] Add the explicit Garmin operation map and browserless `impers` transport.
+- [x] Add Auth0 JWT verification, owner subject allowlist, OAuth scopes, and protected-resource metadata.
+- [x] Add stateful Streamable HTTP `/mcp`, public `/healthz`, and public OAuth discovery.
+- [x] Keep local stdio support and preserve preview/hash/confirmation/write-safety behavior.
+- [x] Omit the unvalidated HR-profile write tool; do not fall back to a browser.
+- [x] Add Render Blueprint, environment example, tests, and deployment documentation.
+- [ ] Resolve dependencies with network access and run the complete pnpm gates.
+- [ ] Push `render-token-auth` to the user-owned GitHub repository.
+- [ ] Create the Render service, enter secrets, configure Auth0, and test through MCP Inspector/ChatGPT.
 
 ## Acceptance
 
-- Exactly seven tools; only two apply tools write Garmin data.
-- Every write needs confirmation, matching canonical proposal/hash, and read-back.
-- No cookies, CSRF tokens, identity, GPS, or raw profile data in tool output/logs.
-- Monday and Friday use exact `135-149 bpm`; Friday says fixed `12%` incline.
-- Weeks 1-5 preserve program; week 6 applies documented deload.
-- Ordinary tests make no live Garmin calls.
-
-## Review
-
-HR profile and all five scheduled workouts verify live. Friday uses Running workout compatibility with an explicit Treadmill launch cue. Workout retry created and scheduled nothing. The additional current-week Treadmill session is verified for 2026-08-21.
-
-## Unresolved questions
-
-None.
+- Exactly six validated token API tools are advertised.
+- Garmin credentials are read from environment only and are redacted from errors/logs.
+- `/mcp` requires Auth0 bearer authentication and the owner subject; health/discovery remain public.
+- Read tools require `garmin:read`; the training write requires `garmin:write` and explicit confirmation.
+- Ordinary tests never create, schedule, edit, or delete Garmin data.

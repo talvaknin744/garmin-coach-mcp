@@ -1,9 +1,9 @@
 # Lessons
 
-- Direct Garmin API authentication is not a safe runtime assumption; use browser-originated requests.
-- Never infer an undocumented profile-write route or payload from bundle strings. Invoke Garmin's model with unchanged values, intercept the request, and block it before delivery.
+- Direct Garmin API access must use the raw environment token and an explicit route map; never fall back to a browser or arbitrary route translation.
+- Never infer an undocumented profile-write route or payload. Keep HR-profile apply hidden until a direct token-backed contract is independently validated.
 - Custom BPM cardio uses `targetValueOne` and `targetValueTwo`, never `zoneNumber`.
-- Garmin web HR zones use one changed-sports `PUT`, `HR_RESERVE`, floor boundaries, and explicit scope states; prove these from the live app bundle before write.
+- Garmin web HR-zone behavior is retained only as read-side context; it is not proof for a token-only write.
 - Approval freshness fingerprints only managed HR state; unrelated volatile profile fields must not invalidate an unchanged proposal.
 - Garmin renumbers workout steps globally; ignore only numeric `stepOrder`, never semantic IDs or keys.
 - Read `/workout-service/workout/types` before trusting upstream workout ID documentation. Current lap-button ID is `1`; ID `7` means iterations, and ID `4` means swimming.
