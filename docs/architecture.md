@@ -18,7 +18,7 @@ Auth0 JWT verification + owner subject binding
     https://connectapi.garmin.com
 ```
 
-The same `McpServer` can run over local stdio when `MCP_TRANSPORT=stdio` or over Streamable HTTP when `MCP_TRANSPORT=streamable-http`. The Render process binds to `0.0.0.0:$PORT` and has no browser, filesystem state, persistent disk, cookie jar, CSRF state, password, or refresh-token store.
+The same `McpServer` can run over local stdio when `MCP_TRANSPORT=stdio` or over Streamable HTTP when `MCP_TRANSPORT=streamable-http`. Local HTTP binds to `127.0.0.1` by default; Render sets `MCP_BIND_HOST=0.0.0.0` for `$PORT`. Streamable HTTP requests with an Origin header must match `MCP_ALLOWED_ORIGINS`. The service has no browser, filesystem state, persistent disk, cookie jar, CSRF state, password, or refresh-token store.
 
 `/healthz` is intentionally unauthenticated for Render health checks. The OAuth protected-resource document is public so ChatGPT can discover the Auth0 authorization server. Every `/mcp` request requires a valid Auth0 RS256 bearer token with the expected issuer and audience; the subject must equal `AUTH0_ALLOWED_SUBJECT`. The session is also bound to that subject, so a valid second owner cannot reuse the first owner's MCP session.
 

@@ -128,7 +128,7 @@ function validApiPath(path: string): string {
     parsed.origin !== "https://garmin.invalid" ||
     parsed.pathname.slice(1) !== path.split("?")[0]
   ) {
-    throw new Error("Garmin API path must be relative");
+    throw new Error("Garmin API path must be relative allowlisted path");
   }
   if (
     parsed.pathname

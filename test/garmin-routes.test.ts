@@ -8,5 +8,8 @@ test("keeps Garmin operations in an explicit route map", () => {
   assert.equal(GARMIN_ROUTE_MAP.createWorkout.method, "POST");
   assert.equal(GARMIN_ROUTE_MAP.getActivities.path, GarminRoutes.activities);
   assert.match(GARMIN_ROUTE_MAP.getCalendar.path, /calendar-service\/year/);
-  assert.equal(Object.keys(GARMIN_ROUTE_MAP).includes("arbitraryBrowserRoute"), false);
+  assert.equal(
+    Object.keys(GARMIN_ROUTE_MAP).includes("arbitraryBrowserRoute"),
+    false
+  );
 });

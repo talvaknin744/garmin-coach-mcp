@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import {
-  canonicalHash,
-  errorMessage,
-  redactForOutput,
-} from "../src/safety.js";
+import { canonicalHash, errorMessage, redactForOutput } from "../src/safety.js";
 
 test("canonical hash ignores object key order", () => {
   assert.equal(canonicalHash({ a: 1, b: 2 }), canonicalHash({ b: 2, a: 1 }));

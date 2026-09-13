@@ -48,6 +48,8 @@ Render free services sleep when idle and use ephemeral storage. This service int
 
 ## Connect ChatGPT
 
+For local Streamable HTTP testing, use `MCP_TRANSPORT=streamable-http`, `MCP_BIND_HOST=127.0.0.1`, and the local Auth0 values from [.env.example](.env.example). The server accepts only the configured Inspector origins and rejects other browser origins before authentication.
+
 After the Render service is live, add its MCP URL (`https://<render-host>/mcp`) as a custom connector in ChatGPT Developer Mode. Complete the Auth0 OAuth flow and approve the requested scopes. If custom connectors or write actions are unavailable under the account/workspace policy, the service remains protected and correct, but ChatGPT must first enable those capabilities.
 
 Before enabling writes, validate read-only calls with the real token using MCP Inspector and a test ChatGPT conversation. Test direct reads, follow-ups, an expired/invalid token, a non-owner subject, and missing scopes. Keep `apply_training_week` disabled until those checks pass.

@@ -4,7 +4,7 @@ services:
     runtime: node
     plan: free
     # Resolve impers/koffi's platform-specific native packages on the Render build image.
-    buildCommand: corepack enable && corepack prepare pnpm@10.14.0 --activate && pnpm install --no-frozen-lockfile && pnpm build
+    buildCommand: corepack enable && corepack prepare pnpm@10.14.0 --activate && pnpm install --frozen-lockfile && pnpm build
     startCommand: pnpm start:http
     healthCheckPath: /healthz
     envVars:
@@ -12,6 +12,10 @@ services:
         value: "20"
       - key: MCP_TRANSPORT
         value: streamable-http
+      - key: MCP_BIND_HOST
+        value: 0.0.0.0
+      - key: MCP_ALLOWED_ORIGINS
+        sync: false
       - key: GARMIN_API_BASE_URL
         value: https://connectapi.garmin.com
       - key: GARMIN_TOKEN

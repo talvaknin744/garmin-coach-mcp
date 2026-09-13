@@ -36,7 +36,9 @@ test("profile preview is read-only and explains token-mode write restrictions", 
   const preview = await service.preview();
   assert.match(preview.canonicalProposal, /maximumHeartRate/);
   assert.equal(
-    preview.warnings.some((warning) => /disabled in token API mode/i.test(warning)),
+    preview.warnings.some((warning) =>
+      /disabled in token API mode/i.test(warning)
+    ),
     true
   );
 });

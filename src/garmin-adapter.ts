@@ -150,10 +150,7 @@ export class GarminAdapter implements GarminWorkoutTransport {
           nonSleepBufferMinutes: 60,
         })
       ),
-      settled(
-        "bodyBattery",
-        this.client.get(GarminRoutes.bodyBattery)
-      ),
+      settled("bodyBattery", this.client.get(GarminRoutes.bodyBattery)),
       settled("hrv", this.client.get(GarminRoutes.hrv(date))),
       settled(
         "heartRate",

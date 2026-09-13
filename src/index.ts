@@ -17,7 +17,10 @@ async function startStdioServer(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (process.argv[2] === "http" || process.env.MCP_TRANSPORT === "streamable-http") {
+  if (
+    process.argv[2] === "http" ||
+    process.env.MCP_TRANSPORT === "streamable-http"
+  ) {
     await startHttpServer();
     return;
   }

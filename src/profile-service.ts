@@ -1,7 +1,4 @@
-import {
-  buildProfileProposal,
-  type RawProfile,
-} from "./profile.js";
+import { buildProfileProposal, type RawProfile } from "./profile.js";
 
 type ProfileGarmin = {
   getRawProfile(): Promise<RawProfile>;

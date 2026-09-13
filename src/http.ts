@@ -6,8 +6,7 @@ import {
   type ServerResponse,
 } from "node:http";
 
-import { StreamableHTTPServerTransport } from
-  "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 import { assertGarminConfig } from "./garmin-client.js";
 import { createMcpServer } from "./mcp-server.js";
@@ -28,6 +27,10 @@ const MAX_BODY_BYTES = 1_048_576;
 const MCP_PATH = "/mcp";
 const HEALTH_PATH = "/healthz";
 const DISCOVERY_PATH = "/.well-known/oauth-protected-resource";
+const DEFAULT_LOCAL_ORIGINS = new Set([
+  "http://localhost:6274",
+  "http://127.0.0.1:6274",
+]);
 
 type Session = {
   server: ReturnType<typeof createMcpServer>;
@@ -40,6 +43,48 @@ let httpServer: Server | null = null;
 
 function headerValue(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function configuredOrigins(): Set<string> {
+  const configured = process.env.MCP_ALLOWED_ORIGINS?.trim();
+  if (!configured) return DEFAULT_LOCAL_ORIGINS;
+  const origins = new Set<string>();
+  for (const value of configured.split(",")) {
+    const origin = value.trim();
+    if (!origin) continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(origin);
+    } catch {
+      throw new Error("MCP_ALLOWED_ORIGINS must contain valid origins");
+    }
+    if (
+      !["http:", "https:"].includes(parsed.protocol) ||
+      parsed.username ||
+      parsed.password ||
+      parsed.pathname !== "/" ||
+      parsed.search ||
+      parsed.hash
+    ) {
+      throw new Error("MCP_ALLOWED_ORIGINS must contain origin URLs only");
+    }
+    origins.add(parsed.origin);
+  }
+  return origins;
+}
+
+function originAllowed(request: IncomingMessage): boolean {
+  const origin = headerValue(request.headers.origin);
+  if (!origin) return true;
+  return configuredOrigins().has(origin);
+}
+
+function bindHost(): string {
+  const configured = process.env.MCP_BIND_HOST?.trim();
+  if (configured) return configured;
+  return process.env.RENDER || process.env.NODE_ENV === "production"
+    ? "0.0.0.0"
+    : "127.0.0.1";
 }
 
 function sendJson(
@@ -95,8 +140,8 @@ function sessionId(request: IncomingMessage): string | undefined {
 function isInitialize(body: unknown): boolean {
   return Boolean(
     body &&
-      typeof body === "object" &&
-      (body as Record<string, unknown>).method === "initialize"
+    typeof body === "object" &&
+    (body as Record<string, unknown>).method === "initialize"
   );
 }
 
@@ -106,12 +151,9 @@ function authResponse(
   config: AuthConfig
 ): void {
   const challenge = authChallenge(config, error);
-  sendJson(
-    response,
-    error.status,
-    authErrorResult(error, config),
-    { "www-authenticate": challenge }
-  );
+  sendJson(response, error.status, authErrorResult(error, config), {
+    "www-authenticate": challenge,
+  });
 }
 
 async function protectedRequest(
@@ -222,6 +264,10 @@ async function requestHandler(
     });
     return;
   }
+  if (!originAllowed(request)) {
+    sendText(response, 403, "Invalid request origin");
+    return;
+  }
   const context = await protectedRequest(request, response, config);
   if (!context) return;
   await runWithAuthContext(context, () =>
@@ -235,6 +281,7 @@ export async function startHttpServer(): Promise<void> {
   const port = Number(process.env.PORT || 8788);
   if (!Number.isInteger(port) || port <= 0 || port > 65535)
     throw new Error("PORT must be a valid TCP port");
+  const host = bindHost();
   httpServer = createServer((request, response) => {
     void requestHandler(request, response, config).catch((error: unknown) => {
       if (response.headersSent) {
@@ -249,13 +296,13 @@ export async function startHttpServer(): Promise<void> {
     const server = httpServer;
     if (!server) return reject(new Error("HTTP server failed to initialize"));
     server.once("error", reject);
-    server.listen(port, "0.0.0.0", () => {
+    server.listen(port, host, () => {
       server.off("error", reject);
       resolve();
     });
   });
   console.error(
-    `garmin-coach-mcp Streamable HTTP listening on 0.0.0.0:${port}`
+    `garmin-coach-mcp Streamable HTTP listening on ${host}:${port}`
   );
 }
 
