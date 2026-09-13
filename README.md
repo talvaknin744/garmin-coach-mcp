@@ -19,6 +19,8 @@ GARMIN_TOKEN='…' MCP_TRANSPORT=stdio pnpm start
 
 Never commit or print the token. Rotate it manually when Garmin expires or revokes it. For local development, copy [.env.example](.env.example) to a private environment manager and fill in the values without committing the file.
 
+After building, the smallest live Garmin check is `GARMIN_TOKEN='…' pnpm smoke:garmin`. It calls one read-only allowlisted route and prints only success, route, and response type.
+
 ## Render deployment
 
 The repository includes [render.yaml](render.yaml) for a free Node web service. In Render, create the Blueprint from the `render-token-auth` branch, then set the secret and Auth0 environment values in the service settings. Render supplies `PORT`; the server binds to `0.0.0.0` and serves:

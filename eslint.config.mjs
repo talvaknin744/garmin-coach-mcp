@@ -16,5 +16,13 @@ export default tseslint.config(
       "no-console": ["warn", { allow: ["error"] }],
     },
   },
+  {
+    files: ["scripts/**/*.mjs"],
+    languageOptions: {
+      globals: {
+        process: "readonly",
+      },
+    },
+  },
   { ignores: ["node_modules/**", "dist/**", ".test-dist/**"] }
 );
