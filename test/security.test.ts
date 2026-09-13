@@ -24,6 +24,7 @@ test("builds static bearer configuration without Auth0 settings", () => {
   );
   assert.deepEqual(protectedResourceMetadata(config), {
     resource: "https://garmin.example/mcp",
+    authorization_servers: ["https://garmin.example"],
     scopes_supported: ["garmin:read", "garmin:write"],
     bearer_methods_supported: ["header"],
     resource_documentation: "https://garmin.example/",

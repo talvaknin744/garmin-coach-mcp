@@ -36,7 +36,9 @@ test("exposes exactly six validated token API tools", () => {
     idempotentHint: true,
     openWorldHint: true,
   });
-  assert.equal(writeTool?.options._meta, undefined);
+  assert.deepEqual(writeTool?.options._meta, {
+    securitySchemes: [{ type: "oauth2", scopes: ["garmin:write"] }],
+  });
   assert.equal(
     registrations.some(({ name }) => name === "apply_hr_profile_update"),
     false

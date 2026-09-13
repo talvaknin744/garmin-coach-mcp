@@ -10,6 +10,15 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 
 import { assertGarminConfig } from "./garmin-client.js";
 import { createMcpServer } from "./mcp-server.js";
+import {
+  authorize,
+  authorizationPage,
+  authorizationServerMetadata,
+  exchangeAuthorizationCode,
+  OAuthError,
+  parseAuthorizationRequest,
+  registerClient,
+} from "./oauth.js";
 import { errorMessage } from "./safety.js";
 import {
   authenticate,
@@ -27,6 +36,10 @@ const MAX_BODY_BYTES = 1_048_576;
 const MCP_PATH = "/mcp";
 const HEALTH_PATH = "/healthz";
 const DISCOVERY_PATH = "/.well-known/oauth-protected-resource";
+const AUTHORIZATION_SERVER_PATH = "/.well-known/oauth-authorization-server";
+const AUTHORIZE_PATH = "/oauth/authorize";
+const TOKEN_PATH = "/oauth/token";
+const REGISTER_PATH = "/oauth/register";
 const DEFAULT_LOCAL_ORIGINS = new Set([
   "http://localhost:6274",
   "http://127.0.0.1:6274",
@@ -116,6 +129,20 @@ function sendText(
   response.end(text);
 }
 
+function sendHtml(
+  response: ServerResponse,
+  status: number,
+  html: string,
+  headers: Record<string, string> = {}
+): void {
+  response.writeHead(status, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    ...headers,
+  });
+  response.end(html);
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -131,6 +158,28 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   } catch {
     throw new Error("MCP request body must be valid JSON");
   }
+}
+
+async function readFormBody(
+  request: IncomingMessage
+): Promise<URLSearchParams> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > MAX_BODY_BYTES)
+      throw new Error("OAuth request body is too large");
+    chunks.push(buffer);
+  }
+  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+}
+
+function oauthErrorResponse(response: ServerResponse, error: OAuthError): void {
+  sendJson(response, error.status, {
+    error: error.code,
+    error_description: error.description,
+  });
 }
 
 function sessionId(request: IncomingMessage): string | undefined {
@@ -252,6 +301,57 @@ async function requestHandler(
   }
   if (url.pathname === DISCOVERY_PATH && request.method === "GET") {
     sendJson(response, 200, protectedResourceMetadata(config));
+    return;
+  }
+  if (url.pathname === AUTHORIZATION_SERVER_PATH && request.method === "GET") {
+    sendJson(response, 200, authorizationServerMetadata(config));
+    return;
+  }
+  if (url.pathname === REGISTER_PATH && request.method === "POST") {
+    try {
+      sendJson(response, 201, registerClient(await readJsonBody(request)));
+    } catch (error) {
+      if (error instanceof OAuthError) oauthErrorResponse(response, error);
+      else sendJson(response, 400, { error: "invalid_request" });
+    }
+    return;
+  }
+  if (url.pathname === AUTHORIZE_PATH) {
+    try {
+      if (request.method === "GET") {
+        const authorizationRequest = parseAuthorizationRequest(
+          url.searchParams,
+          config
+        );
+        sendHtml(response, 200, authorizationPage(authorizationRequest));
+      } else if (request.method === "POST") {
+        const params = await readFormBody(request);
+        const redirect = authorize(params, params.get("owner_token"), config);
+        response.writeHead(302, {
+          location: redirect,
+          "cache-control": "no-store",
+        });
+        response.end();
+      } else {
+        sendText(response, 405, "Method not allowed", { allow: "GET, POST" });
+      }
+    } catch (error) {
+      if (error instanceof OAuthError) oauthErrorResponse(response, error);
+      else sendJson(response, 400, { error: "invalid_request" });
+    }
+    return;
+  }
+  if (url.pathname === TOKEN_PATH && request.method === "POST") {
+    try {
+      sendJson(
+        response,
+        200,
+        exchangeAuthorizationCode(await readFormBody(request), config)
+      );
+    } catch (error) {
+      if (error instanceof OAuthError) oauthErrorResponse(response, error);
+      else sendJson(response, 400, { error: "invalid_request" });
+    }
     return;
   }
   if (url.pathname !== MCP_PATH) {

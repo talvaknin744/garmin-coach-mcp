@@ -34,7 +34,9 @@ test("health and bearer metadata are public while /mcp requires static bearer au
     );
     assert.equal(discovery.status, 200);
     const metadata = await discovery.json();
-    assert.equal(metadata.authorization_servers, undefined);
+    assert.deepEqual(metadata.authorization_servers, [
+      "http://127.0.0.1:38765",
+    ]);
     assert.deepEqual(metadata.scopes_supported, [
       "garmin:read",
       "garmin:write",

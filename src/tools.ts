@@ -48,6 +48,14 @@ const WRITE_ANNOTATIONS = {
   openWorldHint: true,
 } as const;
 
+const READ_META = {
+  securitySchemes: [{ type: "oauth2", scopes: [GARMIN_READ_SCOPE] }],
+} as const;
+
+const WRITE_META = {
+  securitySchemes: [{ type: "oauth2", scopes: [GARMIN_WRITE_SCOPE] }],
+} as const;
+
 function today(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Jerusalem" });
 }
@@ -103,6 +111,7 @@ export function registerTools(server: McpServer): void {
         date: DateSchema.optional().describe("YYYY-MM-DD; defaults to today"),
       },
       annotations: READ_ANNOTATIONS,
+      _meta: READ_META,
     },
     ({ date }) =>
       result(() => {
@@ -117,6 +126,7 @@ export function registerTools(server: McpServer): void {
       description:
         "Return the exact five build weeks and week-six deload program.",
       annotations: READ_ANNOTATIONS,
+      _meta: READ_META,
     },
     () =>
       result(() => {
@@ -138,6 +148,7 @@ export function registerTools(server: McpServer): void {
         illness: z.boolean().default(false),
       },
       annotations: READ_ANNOTATIONS,
+      _meta: READ_META,
     },
     ({ weekStart, weekNumber, recoveryAction, painOrInjury, illness }) =>
       result(async () => {
@@ -183,6 +194,7 @@ export function registerTools(server: McpServer): void {
         confirmed: z.literal(true),
       },
       annotations: WRITE_ANNOTATIONS,
+      _meta: WRITE_META,
     },
     ({ canonicalProposal, hash, confirmed }) =>
       result(() => {
@@ -204,6 +216,7 @@ export function registerTools(server: McpServer): void {
         "Read Garmin and compare scheduled dates, managed workout steps, targets, descriptions, and IDs.",
       inputSchema: { canonicalProposal: z.string().min(1) },
       annotations: READ_ANNOTATIONS,
+      _meta: READ_META,
     },
     ({ canonicalProposal }) =>
       result(() => {
@@ -218,6 +231,7 @@ export function registerTools(server: McpServer): void {
       description:
         "Read current HR settings and return every approved before/after field, canonical proposal, and hash. Performs no Garmin writes.",
       annotations: READ_ANNOTATIONS,
+      _meta: READ_META,
     },
     () =>
       result(() => {

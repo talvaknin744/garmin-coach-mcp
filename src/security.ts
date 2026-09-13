@@ -99,6 +99,7 @@ export function getAuthConfig(
 export function protectedResourceMetadata(config: AuthConfig) {
   return {
     resource: config.resourceUrl,
+    authorization_servers: [config.publicUrl],
     scopes_supported: [...GARMIN_SCOPES],
     bearer_methods_supported: ["header"],
     resource_documentation: `${config.publicUrl}/`,
@@ -124,7 +125,7 @@ function bearerToken(header: string | undefined): string {
   return match[1];
 }
 
-function tokenMatches(actual: string, expected: string): boolean {
+export function secretMatches(actual: string, expected: string): boolean {
   const actualBytes = Buffer.from(actual, "utf8");
   const expectedBytes = Buffer.from(expected, "utf8");
   if (actualBytes.length !== expectedBytes.length) return false;
@@ -136,7 +137,7 @@ export async function authenticate(
   config: AuthConfig
 ): Promise<AuthContext> {
   const token = bearerToken(authorization);
-  if (!tokenMatches(token, config.authToken)) {
+  if (!secretMatches(token, config.authToken)) {
     throw new AuthError(401, "invalid_token", "Bearer token is invalid");
   }
   return {
