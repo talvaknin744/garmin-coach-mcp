@@ -3,6 +3,7 @@ dist/
 .test-dist/
 .codex/
 *.tsbuildinfo
-.env
+.env*
+!.env.example
 fit_files/
 dashboard.html
