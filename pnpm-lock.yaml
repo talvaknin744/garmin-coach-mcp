@@ -14,9 +14,6 @@ importers:
       impers:
         specifier: 0.1.2
         version: 0.1.2
-      jose:
-        specifier: 6.2.9
-        version: 6.2.9
       zod:
         specifier: 3.25.76
         version: 3.25.76

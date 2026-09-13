@@ -1,6 +1,6 @@
 # Garmin Coach MCP
 
-Private Garmin coaching tools exposed through local stdio or an Auth0-protected Streamable HTTP MCP service. The deployed service is intended for one owner: Auth0 authenticates the ChatGPT connection and `AUTH0_ALLOWED_SUBJECT` rejects every other user.
+Private Garmin coaching tools exposed through local stdio or a static-bearer-protected Streamable HTTP MCP service. The deployed service is intended for one owner: a single `MCP_AUTH_TOKEN` protects every `/mcp` request.
 
 The Garmin side uses a raw `GARMIN_TOKEN` from the environment and browserless HTTP through [`impers`](https://github.com/lexiforest/impers), which provides curl-impersonate TLS/HTTP fingerprints. No Playwright, browser profile, cookies, CSRF state, password, or refresh-token persistence is used.
 
@@ -23,38 +23,34 @@ After building, the smallest live Garmin check is `GARMIN_TOKEN='…' pnpm smoke
 
 ## Render deployment
 
-The repository includes [render.yaml](render.yaml) for a free Node web service. In Render, create the Blueprint from the `render-token-auth` branch, then set the secret and Auth0 environment values in the service settings. Render supplies `PORT`; the server binds to `0.0.0.0` and serves:
+The repository includes [render.yaml](render.yaml) for a free Node web service. In Render, create the Blueprint from the `render-token-auth` branch, then set the two secrets in the service settings. Render supplies `PORT`; the server binds to `0.0.0.0` and serves:
 
 | Route | Access | Purpose |
 | --- | --- | --- |
 | `GET /healthz` | Public | Render health check only |
-| `GET /.well-known/oauth-protected-resource` | Public | OAuth resource metadata |
-| `POST/GET/DELETE /mcp` | Auth0 bearer token required | Streamable HTTP MCP |
+| `GET /.well-known/oauth-protected-resource` | Public | Bearer resource metadata |
+| `POST/GET/DELETE /mcp` | Static bearer token required | Streamable HTTP MCP |
 
-Required Render values:
+Required Render values (Render supplies `RENDER_EXTERNAL_URL`, so the public/resource URLs can stay unset):
 
 ```text
 GARMIN_TOKEN=<raw Garmin access token>
+MCP_AUTH_TOKEN=<long random bearer secret>
 GARMIN_API_BASE_URL=https://connectapi.garmin.com
-AUTH0_ISSUER=https://<tenant>.auth0.com/
-AUTH0_AUDIENCE=https://<render-host>/mcp
-AUTH0_ALLOWED_SUBJECT=<your Auth0 subject>
-MCP_PUBLIC_URL=https://<render-host>
-MCP_RESOURCE_URL=https://<render-host>/mcp
 MCP_TRANSPORT=streamable-http
 ```
 
-`MCP_RESOURCE_URL` and `AUTH0_AUDIENCE` must be the exact same URL. Configure the Auth0 API with that identifier, RS256 signing, and the `garmin:read` and `garmin:write` scopes. Allow only your Auth0 subject in `AUTH0_ALLOWED_SUBJECT`. Use Auth0 manual registration or CIMD, and paste the exact ChatGPT redirect URI shown during connector setup into Auth0. ChatGPT uses OAuth 2.1 with PKCE; do not add a static customer API key or `MCP_AUTH_TOKEN`.
+Generate `MCP_AUTH_TOKEN` with `openssl rand -hex 32`. Store it only in Render and in the client’s secure bearer-token setting. Rotate it by changing the Render value and updating the client. Do not put either Garmin or MCP secrets in Git.
 
 Render free services sleep when idle and use ephemeral storage. This service intentionally stores no runtime Garmin state or persistent disk data.
 
 ## Connect ChatGPT
 
-For local Streamable HTTP testing, use `MCP_TRANSPORT=streamable-http`, `MCP_BIND_HOST=127.0.0.1`, and the local Auth0 values from [.env.example](.env.example). The server accepts only the configured Inspector origins and rejects other browser origins before authentication.
+For local Streamable HTTP testing, use `MCP_TRANSPORT=streamable-http`, `MCP_BIND_HOST=127.0.0.1`, and `MCP_AUTH_TOKEN` from [.env.example](.env.example). The server accepts only the configured Inspector origins and rejects other browser origins before authentication.
 
-After the Render service is live, add its MCP URL (`https://<render-host>/mcp`) as a custom connector in ChatGPT Developer Mode. Complete the Auth0 OAuth flow and approve the requested scopes. If custom connectors or write actions are unavailable under the account/workspace policy, the service remains protected and correct, but ChatGPT must first enable those capabilities.
+The static bearer can be used with MCP Inspector, curl, or another MCP client that lets you set `Authorization: Bearer ...`. OpenAI’s documented ChatGPT custom-MCP flow expects OAuth 2.1, so this mode may not be accepted by ChatGPT’s connector UI. If the UI has a custom bearer/header option in your account, use the Render MCP URL and configure the same bearer value; otherwise an OAuth provider is required for ChatGPT access.
 
-Before enabling writes, validate read-only calls with the real token using MCP Inspector and a test ChatGPT conversation. Test direct reads, follow-ups, an expired/invalid token, a non-owner subject, and missing scopes. Keep `apply_training_week` disabled until those checks pass.
+Before enabling writes, validate read-only calls with the real Garmin token using MCP Inspector. Test direct reads, follow-ups, an invalid MCP token, and missing authorization. Keep `apply_training_week` disabled until those checks pass.
 
 ## Tools
 

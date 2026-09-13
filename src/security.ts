@@ -1,11 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-
-import {
-  createRemoteJWKSet,
-  jwtVerify,
-  type JWTPayload,
-  type JWTVerifyGetKey,
-} from "jose";
+import { timingSafeEqual } from "node:crypto";
 
 export const GARMIN_READ_SCOPE = "garmin:read";
 export const GARMIN_WRITE_SCOPE = "garmin:write";
@@ -15,15 +9,13 @@ export type AuthConfig = {
   publicUrl: string;
   resourceUrl: string;
   metadataUrl: string;
-  issuer: string;
-  audience: string;
-  allowedSubject: string;
+  authToken: string;
 };
 
 export type AuthContext = {
-  subject: string;
+  subject: "static-owner";
   scopes: ReadonlySet<string>;
-  claims: JWTPayload;
+  claims: Readonly<Record<string, never>>;
 };
 
 export class AuthError extends Error {
@@ -38,7 +30,6 @@ export class AuthError extends Error {
 }
 
 const authStorage = new AsyncLocalStorage<AuthContext>();
-let jwks: { issuer: string; url: URL; getKey: JWTVerifyGetKey } | null = null;
 
 function required(
   env: NodeJS.ProcessEnv,
@@ -65,11 +56,6 @@ function urlValue(value: string, name: string): string {
     throw new Error(`${name} must be a valid HTTP(S) URL`);
   }
   return parsed.toString().replace(/\/+$/, "");
-}
-
-function issuerValue(value: string): string {
-  const normalized = urlValue(value, "AUTH0_ISSUER");
-  return `${normalized}/`;
 }
 
 export function getAuthConfig(
@@ -100,56 +86,23 @@ export function getAuthConfig(
   ) {
     throw new Error("MCP_RESOURCE_URL must use HTTPS in production");
   }
-  if (requireAuth) {
-    const issuer = issuerValue(required(env, "AUTH0_ISSUER"));
-    const allowedSubject = required(env, "AUTH0_ALLOWED_SUBJECT");
-    const audience = urlValue(
-      env.AUTH0_AUDIENCE?.trim() || resourceUrl,
-      "AUTH0_AUDIENCE"
-    );
-    if (audience !== resourceUrl) {
-      throw new Error("AUTH0_AUDIENCE must exactly equal MCP_RESOURCE_URL");
-    }
-    return {
-      publicUrl,
-      resourceUrl,
-      metadataUrl: `${publicUrl}/.well-known/oauth-protected-resource`,
-      issuer,
-      audience,
-      allowedSubject,
-    };
-  }
   return {
     publicUrl,
     resourceUrl,
     metadataUrl: `${publicUrl}/.well-known/oauth-protected-resource`,
-    issuer: env.AUTH0_ISSUER?.trim() ? issuerValue(env.AUTH0_ISSUER) : "",
-    audience: env.AUTH0_AUDIENCE?.trim() || resourceUrl,
-    allowedSubject: env.AUTH0_ALLOWED_SUBJECT?.trim() || "",
+    authToken: requireAuth
+      ? required(env, "MCP_AUTH_TOKEN")
+      : env.MCP_AUTH_TOKEN?.trim() || "",
   };
 }
 
 export function protectedResourceMetadata(config: AuthConfig) {
   return {
     resource: config.resourceUrl,
-    authorization_servers: [config.issuer],
     scopes_supported: [...GARMIN_SCOPES],
     bearer_methods_supported: ["header"],
     resource_documentation: `${config.publicUrl}/`,
   };
-}
-
-function scopeSet(payload: JWTPayload): Set<string> {
-  const value = payload.scope;
-  if (typeof value === "string") {
-    return new Set(value.split(/\s+/).filter(Boolean));
-  }
-  if (Array.isArray(value)) {
-    return new Set(
-      value.filter((item): item is string => typeof item === "string")
-    );
-  }
-  return new Set();
 }
 
 function bearerToken(header: string | undefined): string {
@@ -171,12 +124,11 @@ function bearerToken(header: string | undefined): string {
   return match[1];
 }
 
-function keyFor(config: AuthConfig): JWTVerifyGetKey {
-  if (!jwks || jwks.issuer !== config.issuer) {
-    const url = new URL(".well-known/jwks.json", config.issuer);
-    jwks = { issuer: config.issuer, url, getKey: createRemoteJWKSet(url) };
-  }
-  return jwks.getKey;
+function tokenMatches(actual: string, expected: string): boolean {
+  const actualBytes = Buffer.from(actual, "utf8");
+  const expectedBytes = Buffer.from(expected, "utf8");
+  if (actualBytes.length !== expectedBytes.length) return false;
+  return timingSafeEqual(actualBytes, expectedBytes);
 }
 
 export async function authenticate(
@@ -184,31 +136,14 @@ export async function authenticate(
   config: AuthConfig
 ): Promise<AuthContext> {
   const token = bearerToken(authorization);
-  let payload: JWTPayload;
-  try {
-    ({ payload } = await jwtVerify(token, keyFor(config), {
-      issuer: config.issuer,
-      audience: config.audience,
-      algorithms: ["RS256"],
-    }));
-  } catch {
-    throw new AuthError(
-      401,
-      "invalid_token",
-      "Bearer token is invalid or expired"
-    );
+  if (!tokenMatches(token, config.authToken)) {
+    throw new AuthError(401, "invalid_token", "Bearer token is invalid");
   }
-  if (
-    typeof payload.sub !== "string" ||
-    payload.sub !== config.allowedSubject
-  ) {
-    throw new AuthError(
-      403,
-      "access_denied",
-      "This Garmin MCP is restricted to its owner"
-    );
-  }
-  return { subject: payload.sub, scopes: scopeSet(payload), claims: payload };
+  return {
+    subject: "static-owner",
+    scopes: new Set(GARMIN_SCOPES),
+    claims: {},
+  };
 }
 
 export function runWithAuthContext<T>(
@@ -235,8 +170,8 @@ export function requireScope(scope: string): void {
   }
 }
 
-export function authChallenge(config: AuthConfig, error?: AuthError): string {
-  const parts = [`Bearer resource_metadata="${config.metadataUrl}"`];
+export function authChallenge(_config: AuthConfig, error?: AuthError): string {
+  const parts = [`Bearer realm="garmin-coach-mcp"`];
   if (error) {
     parts.push(`error="${error.code}"`);
     parts.push(`error_description="${error.description.replaceAll('"', "'")}"`);
@@ -244,11 +179,9 @@ export function authChallenge(config: AuthConfig, error?: AuthError): string {
   return parts.join(", ");
 }
 
-export function authErrorResult(error: AuthError, config: AuthConfig) {
-  const challenge = authChallenge(config, error);
+export function authErrorResult(error: AuthError, _config: AuthConfig) {
   return {
     isError: true,
     content: [{ type: "text" as const, text: error.description }],
-    _meta: { "mcp/www_authenticate": [challenge] },
   };
 }

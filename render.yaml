@@ -20,13 +20,5 @@ services:
         value: https://connectapi.garmin.com
       - key: GARMIN_TOKEN
         sync: false
-      - key: AUTH0_ISSUER
-        sync: false
-      - key: AUTH0_AUDIENCE
-        sync: false
-      - key: AUTH0_ALLOWED_SUBJECT
-        sync: false
-      - key: MCP_PUBLIC_URL
-        sync: false
-      - key: MCP_RESOURCE_URL
+      - key: MCP_AUTH_TOKEN
         sync: false
