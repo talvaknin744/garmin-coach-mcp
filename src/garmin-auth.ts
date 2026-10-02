@@ -78,10 +78,34 @@ export function createGarminSsoFetch(
 
 function quietClient(): GarminAuthClient {
   const session = new Session({ impersonate: "chrome" });
+  const diagnosticEvents = new Set([
+    "[SSO] OAuth consumer fetch",
+    "[SSO] CSRF fetch",
+    "[SSO] CSRF token not found in response",
+    "[SSO] Login response",
+    "[SSO] MFA detected",
+    "[SSO] Error indicators found",
+    "[SSO] Ticket found in HTML",
+    "[SSO] Ticket not found in HTML",
+    "[SSO] Embed bootstrap",
+  ]);
+  const diagnostic = (...args: unknown[]) => {
+    if (process.env.GARMIN_AUTH_DIAGNOSTICS !== "1") return;
+    const [event, context] = args;
+    if (typeof event !== "string" || !diagnosticEvents.has(event)) return;
+    const fields: Record<string, number | string> = { event };
+    if (context && typeof context === "object") {
+      const values = context as Record<string, unknown>;
+      for (const field of ["status", "size"]) {
+        if (typeof values[field] === "number") fields[field] = values[field];
+      }
+    }
+    process.stdout.write(`[garmin-auth-diag] ${JSON.stringify(fields)}\n`);
+  };
   const logger = {
-    debug: () => undefined,
+    debug: diagnostic,
     info: () => undefined,
-    warn: () => undefined,
+    warn: diagnostic,
     error: () => undefined,
   };
   const client = createGarminConnectClient({
