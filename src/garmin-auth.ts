@@ -12,18 +12,44 @@ type GarminOAuthTokens = {
   };
 };
 
+const DEFAULT_SSO_RATE_LIMIT_COOLDOWN_MS = 15 * 60 * 1_000;
+
 export type GarminAuthClient = Pick<GarminConnectClient, "auth" | "service"> & {
   close?: () => Promise<void>;
 };
 export type GarminAuthClientFactory = () => GarminAuthClient;
 export type GarminSsoSession = Pick<Session, "request" | "close">;
 
+export class GarminSsoRateLimitError extends Error {
+  constructor(readonly retryAfterMs?: number) {
+    const retrySeconds =
+      retryAfterMs === undefined ? undefined : Math.ceil(retryAfterMs / 1_000);
+    super(
+      retrySeconds === undefined
+        ? "Garmin SSO rate limit reached"
+        : `Garmin SSO rate limit reached; retry after ${retrySeconds} seconds`
+    );
+    this.name = "GarminSsoRateLimitError";
+  }
+}
+
 export type GarminCredentialProviderOptions = {
   email?: string;
   password?: string;
   createClient?: GarminAuthClientFactory;
   now?: () => number;
+  nowMilliseconds?: () => number;
 };
+
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value?.trim()) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
+  const retryAt = Date.parse(value);
+  return Number.isFinite(retryAt)
+    ? Math.max(0, retryAt - Date.now())
+    : undefined;
+}
 
 function credentialsFromEnv(env: NodeJS.ProcessEnv = process.env): {
   email: string;
@@ -68,6 +94,11 @@ export function createGarminSsoFetch(
       impersonate: "chrome",
       timeout: 30,
     });
+    if (response.status === 429) {
+      throw new GarminSsoRateLimitError(
+        parseRetryAfter(response.headers.get("retry-after"))
+      );
+    }
     return new Response(new Uint8Array(response.content), {
       status: response.status,
       statusText: response.statusText,
@@ -97,7 +128,9 @@ export class GarminCredentialProvider {
   private readonly password: string;
   private readonly client: GarminAuthClient;
   private readonly now: () => number;
+  private readonly nowMilliseconds: () => number;
   private operation: Promise<string> | undefined;
+  private loginCooldownUntil = 0;
 
   constructor(options: GarminCredentialProviderOptions = {}) {
     const credentials =
@@ -108,6 +141,7 @@ export class GarminCredentialProvider {
     this.password = credentials.password;
     this.client = (options.createClient || quietClient)();
     this.now = options.now || (() => Math.floor(Date.now() / 1000));
+    this.nowMilliseconds = options.nowMilliseconds || Date.now;
   }
 
   async getToken(): Promise<string> {
@@ -158,8 +192,23 @@ export class GarminCredentialProvider {
   }
 
   private async fullLogin(): Promise<void> {
+    const now = this.nowMilliseconds();
+    if (this.loginCooldownUntil > now) {
+      throw new GarminSsoRateLimitError(this.loginCooldownUntil - now);
+    }
     await this.client.auth.logout().catch(() => undefined);
-    await this.client.auth.login(this.email, this.password);
+    try {
+      await this.client.auth.login(this.email, this.password);
+      this.loginCooldownUntil = 0;
+    } catch (error) {
+      if (error instanceof GarminSsoRateLimitError) {
+        const cooldownMs =
+          error.retryAfterMs ?? DEFAULT_SSO_RATE_LIMIT_COOLDOWN_MS;
+        this.loginCooldownUntil = this.nowMilliseconds() + cooldownMs;
+        throw new GarminSsoRateLimitError(cooldownMs);
+      }
+      throw error;
+    }
   }
 
   private async refreshOrLogin(): Promise<void> {
@@ -174,20 +223,20 @@ export class GarminCredentialProvider {
     }
   }
 
-  private async serialized(operation: () => Promise<string>): Promise<string> {
-    const pending = this.operation;
-    if (pending) {
-      await pending.catch(() => undefined);
-      return this.serialized(operation);
-    }
+  private serialized(operation: () => Promise<string>): Promise<string> {
+    if (this.operation) return this.operation;
 
     const run = operation();
     this.operation = run;
-    try {
-      return await run;
-    } finally {
-      if (this.operation === run) this.operation = undefined;
-    }
+    void run.then(
+      () => {
+        if (this.operation === run) this.operation = undefined;
+      },
+      () => {
+        if (this.operation === run) this.operation = undefined;
+      }
+    );
+    return run;
   }
 }
 
