@@ -5,7 +5,8 @@ services:
     plan: free
     # Resolve impers/koffi's platform-specific native packages on the Render build image.
     buildCommand: corepack enable && corepack prepare pnpm@10.14.0 --activate && pnpm install --frozen-lockfile && pnpm build
-    startCommand: pnpm start:http
+    # Start Node directly so cold starts do not download pnpm through Corepack.
+    startCommand: node dist/index.js http
     healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION

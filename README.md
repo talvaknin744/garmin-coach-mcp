@@ -44,6 +44,10 @@ Generate `MCP_AUTH_TOKEN` with `openssl rand -hex 32`. Store it only in Render a
 
 Render free services sleep when idle and use ephemeral storage. This service intentionally stores no runtime Garmin state or persistent disk data.
 
+The Render start command is `node dist/index.js http`, equivalent to `pnpm start:http` without invoking Corepack or downloading pnpm during a cold start. pnpm remains part of the build command. This removes package-manager startup overhead; it does not eliminate Render's free-service wake-up delay.
+
+For an existing service, a Git push applies `render.yaml` settings only when the service is managed by a Blueprint that syncs this branch. If Blueprint Auto Sync is disabled, manually sync the Blueprint. If the service is not Blueprint-managed, set its Start Command to `node dist/index.js http` and redeploy; an ordinary code auto-deploy does not update that setting from this file. See [Render's Blueprint sync documentation](https://render.com/docs/infrastructure-as-code#disabling-automatic-sync).
+
 ## Connect ChatGPT
 
 For local Streamable HTTP testing, use `MCP_TRANSPORT=streamable-http`, `MCP_BIND_HOST=127.0.0.1`, and `MCP_AUTH_TOKEN` from [.env.example](.env.example). The server accepts only the configured Inspector origins and rejects other browser origins before authentication.
