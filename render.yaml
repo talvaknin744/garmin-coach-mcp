@@ -9,7 +9,7 @@ services:
     healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION
-        value: "20"
+        value: "22"
       - key: MCP_TRANSPORT
         value: streamable-http
       - key: MCP_BIND_HOST
@@ -18,7 +18,9 @@ services:
         sync: false
       - key: GARMIN_API_BASE_URL
         value: https://connectapi.garmin.com
-      - key: GARMIN_TOKEN
+      - key: GARMIN_EMAIL
+        sync: false
+      - key: GARMIN_PASSWORD
         sync: false
       - key: MCP_AUTH_TOKEN
         sync: false

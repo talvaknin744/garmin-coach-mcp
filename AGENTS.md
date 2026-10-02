@@ -7,5 +7,5 @@
 - Use an explicit Garmin operation map. Do not guess unsupported routes or add a browser fallback.
 - Every Garmin write requires explicit confirmation, canonical hash validation, and read-back.
 - No workout deletion. Profile and workout approvals stay separate.
-- Read the raw Garmin token only from `GARMIN_TOKEN`; never persist or print it.
+- Read Garmin credentials only from `GARMIN_EMAIL` and `GARMIN_PASSWORD` secrets. Keep access/refresh tokens in memory only; never persist or print credentials or tokens.
 - Use pnpm and Zod at external boundaries.

@@ -18,7 +18,7 @@ function response(
   return { status, text, content };
 }
 
-test("requires GARMIN_TOKEN without printing or echoing its value", () => {
+test("requires a complete Garmin credential pair or a static token", () => {
   const missing = () =>
     assertGarminConfig({
       GARMIN_API_BASE_URL: "https://connectapi.garmin.com",
@@ -27,19 +27,25 @@ test("requires GARMIN_TOKEN without printing or echoing its value", () => {
     missing,
     (error: unknown) =>
       error instanceof Error &&
-      /GARMIN_TOKEN/.test(error.message) &&
+      /GARMIN_EMAIL/.test(error.message) &&
       !error.message.includes(TOKEN)
   );
   assert.throws(
     () =>
       assertGarminConfig({
-        GARMIN_TOKEN: "   ",
+        GARMIN_EMAIL: "owner@example.com",
         GARMIN_API_BASE_URL: "https://connectapi.garmin.com",
       }),
     (error: unknown) =>
       error instanceof Error &&
-      /GARMIN_TOKEN/.test(error.message) &&
-      !error.message.includes(TOKEN)
+      /both GARMIN_EMAIL and GARMIN_PASSWORD/.test(error.message)
+  );
+  assert.doesNotThrow(() =>
+    assertGarminConfig({
+      GARMIN_EMAIL: "owner@example.com",
+      GARMIN_PASSWORD: "private-password",
+      GARMIN_API_BASE_URL: "https://connectapi.garmin.com",
+    })
   );
 });
 
@@ -134,4 +140,28 @@ test("rejects non-relative paths before making a request", async () => {
     client.get("../steal"),
     /relative allowlisted|traversal/i
   );
+});
+
+test("recovers one Garmin 401 using credential-backed token rotation", async () => {
+  let requests = 0;
+  const client = new GarminClient({
+    tokenProvider: {
+      getToken: async () => "expired-token",
+      recoverRejectedToken: async () => "replacement-token",
+    },
+    requester: async (_method, _url, options) => {
+      requests++;
+      const headers = options.headers;
+      if (requests === 1) {
+        assert.equal(headers.Authorization, "Bearer expired-token");
+        return response(401);
+      }
+      assert.equal(headers.Authorization, "Bearer replacement-token");
+      return response(200, '{"ok":true}');
+    },
+  });
+  assert.deepEqual(await client.get("sleep-service/sleep/dailySleepData"), {
+    ok: true,
+  });
+  assert.equal(requests, 2);
 });

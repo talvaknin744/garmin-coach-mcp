@@ -1,4 +1,8 @@
 import * as impers from "impers";
+import {
+  getGarminCredentialProvider,
+  type GarminCredentialProvider,
+} from "./garmin-auth.js";
 
 const DEFAULT_API_BASE_URL = "https://connectapi.garmin.com";
 const DEFAULT_TIMEOUT_SECONDS = 30;
@@ -29,6 +33,10 @@ export type GarminRequester = (
 
 export type GarminClientOptions = {
   token?: string;
+  tokenProvider?: Pick<
+    GarminCredentialProvider,
+    "getToken" | "recoverRejectedToken"
+  >;
   baseUrl?: string;
   timeoutSeconds?: number;
   impersonate?: string;
@@ -169,7 +177,17 @@ function parsedResponse(
 }
 
 export function assertGarminConfig(env: NodeJS.ProcessEnv = process.env): void {
-  requiredToken(env.GARMIN_TOKEN);
+  const hasToken = Boolean(env.GARMIN_TOKEN?.trim());
+  const hasEmail = Boolean(env.GARMIN_EMAIL?.trim());
+  const hasPassword = Boolean(env.GARMIN_PASSWORD?.trim());
+  if (hasEmail !== hasPassword) {
+    throw new Error("Set both GARMIN_EMAIL and GARMIN_PASSWORD");
+  }
+  if (!hasToken && !hasEmail) {
+    throw new Error(
+      "Set GARMIN_EMAIL and GARMIN_PASSWORD, or provide GARMIN_TOKEN"
+    );
+  }
   apiBaseUrl(env.GARMIN_API_BASE_URL);
   timeoutSeconds(env.GARMIN_HTTP_TIMEOUT_SECONDS);
 }
@@ -180,9 +198,20 @@ export class GarminClient {
   private readonly timeout?: number;
   private readonly impersonate: string;
   private readonly requester: GarminRequester;
+  private readonly tokenProvider?: Pick<
+    GarminCredentialProvider,
+    "getToken" | "recoverRejectedToken"
+  >;
 
   constructor(options: GarminClientOptions = {}) {
-    this.token = options.token?.trim() || undefined;
+    const credentialsConfigured = Boolean(
+      process.env.GARMIN_EMAIL?.trim() && process.env.GARMIN_PASSWORD?.trim()
+    );
+    this.token =
+      options.token?.trim() ||
+      (credentialsConfigured ? undefined : process.env.GARMIN_TOKEN?.trim()) ||
+      undefined;
+    this.tokenProvider = options.tokenProvider;
     this.baseUrl = options.baseUrl ? apiBaseUrl(options.baseUrl) : undefined;
     this.timeout = options.timeoutSeconds;
     this.impersonate =
@@ -232,7 +261,6 @@ export class GarminClient {
   ): Promise<GarminResponse> {
     const path = validApiPath(rawPath);
     const { pathname, params: pathParams } = splitPath(path);
-    const token = requiredToken(this.token);
     const baseUrl = this.baseUrl || apiBaseUrl();
     const url = new URL(`${baseUrl}${pathname}`);
     const mergedParams = { ...pathParams, ...params };
@@ -240,15 +268,31 @@ export class GarminClient {
       url.searchParams.set(key, String(value));
     });
     const options: GarminRequestOptions = {
-      headers: {
-        Accept: "application/json, application/octet-stream;q=0.9",
-        Authorization: `Bearer ${token}`,
-      },
+      headers: { Accept: "application/json, application/octet-stream;q=0.9" },
       impersonate: this.impersonate,
       timeout: this.timeout || timeoutSeconds(),
     };
     if (body !== undefined) options.json = body;
+    const token = await this.currentToken();
+    options.headers.Authorization = `Bearer ${token}`;
+    const response = await this.requester(method, url.toString(), options);
+    const provider = this.authProvider();
+    if (response.status !== 401 || !provider) return response;
+
+    const replacement = await provider.recoverRejectedToken(token);
+    options.headers.Authorization = `Bearer ${replacement}`;
     return this.requester(method, url.toString(), options);
+  }
+
+  private authProvider() {
+    if (this.token) return undefined;
+    return this.tokenProvider || getGarminCredentialProvider();
+  }
+
+  private currentToken(): Promise<string> {
+    if (this.token) return Promise.resolve(this.token);
+    const provider = this.authProvider();
+    return provider ? provider.getToken() : Promise.resolve(requiredToken());
   }
 }
 

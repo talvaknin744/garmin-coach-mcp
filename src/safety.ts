@@ -35,7 +35,14 @@ export function redactForOutput(value: unknown): unknown {
 }
 
 export function errorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : "Unknown error";
-  const token = process.env.GARMIN_TOKEN?.trim();
-  return token ? message.replaceAll(token, "[redacted Garmin token]") : message;
+  let message = error instanceof Error ? error.message : "Unknown error";
+  const secrets = [
+    process.env.GARMIN_TOKEN,
+    process.env.GARMIN_EMAIL,
+    process.env.GARMIN_PASSWORD,
+  ].filter((secret): secret is string => Boolean(secret?.trim()));
+  for (const secret of secrets) {
+    message = message.replaceAll(secret, "[redacted Garmin secret]");
+  }
+  return message;
 }

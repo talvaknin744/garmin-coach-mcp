@@ -33,10 +33,31 @@ test("error messages redact the raw Garmin token", () => {
   try {
     assert.equal(
       errorMessage(new Error("request contained secret-garmin-token")),
-      "request contained [redacted Garmin token]"
+      "request contained [redacted Garmin secret]"
     );
   } finally {
     if (previous === undefined) delete process.env.GARMIN_TOKEN;
     else process.env.GARMIN_TOKEN = previous;
+  }
+});
+
+test("error messages redact Garmin login credentials", () => {
+  const previousEmail = process.env.GARMIN_EMAIL;
+  const previousPassword = process.env.GARMIN_PASSWORD;
+  process.env.GARMIN_EMAIL = "owner@example.com";
+  process.env.GARMIN_PASSWORD = "private-password";
+  try {
+    const message = errorMessage(
+      new Error("login failed for owner@example.com with private-password")
+    );
+    assert.equal(
+      message,
+      "login failed for [redacted Garmin secret] with [redacted Garmin secret]"
+    );
+  } finally {
+    if (previousEmail === undefined) delete process.env.GARMIN_EMAIL;
+    else process.env.GARMIN_EMAIL = previousEmail;
+    if (previousPassword === undefined) delete process.env.GARMIN_PASSWORD;
+    else process.env.GARMIN_PASSWORD = previousPassword;
   }
 });
