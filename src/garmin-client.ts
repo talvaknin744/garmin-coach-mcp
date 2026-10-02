@@ -31,12 +31,14 @@ export type GarminRequester = (
   options: GarminRequestOptions
 ) => Promise<GarminResponse>;
 
+type GarminTokenProvider = Pick<
+  GarminCredentialProvider,
+  "getToken" | "recoverRejectedToken"
+> & { close?: () => Promise<void> };
+
 export type GarminClientOptions = {
   token?: string;
-  tokenProvider?: Pick<
-    GarminCredentialProvider,
-    "getToken" | "recoverRejectedToken"
-  >;
+  tokenProvider?: GarminTokenProvider;
   baseUrl?: string;
   timeoutSeconds?: number;
   impersonate?: string;
@@ -198,10 +200,7 @@ export class GarminClient {
   private readonly timeout?: number;
   private readonly impersonate: string;
   private readonly requester: GarminRequester;
-  private readonly tokenProvider?: Pick<
-    GarminCredentialProvider,
-    "getToken" | "recoverRejectedToken"
-  >;
+  private readonly tokenProvider?: GarminTokenProvider;
 
   constructor(options: GarminClientOptions = {}) {
     const credentialsConfigured = Boolean(
@@ -250,7 +249,8 @@ export class GarminClient {
   }
 
   async close(): Promise<void> {
-    // The stateless impers request API has no browser/session resources to close.
+    if (this.token) return;
+    await (this.tokenProvider || getGarminCredentialProvider()).close?.();
   }
 
   private async send(

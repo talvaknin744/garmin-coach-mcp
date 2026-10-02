@@ -2,9 +2,50 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createGarminSsoFetch,
   GarminCredentialProvider,
   type GarminAuthClient,
+  type GarminSsoSession,
 } from "../src/garmin-auth.js";
+
+test("uses the impersonating SSO session and form body without exposing secrets", async () => {
+  let request:
+    | { method: string; url: string; options: Record<string, unknown> }
+    | undefined;
+  const session = {
+    request: async (
+      method: string,
+      url: string,
+      options: Record<string, unknown>
+    ) => {
+      request = { method, url, options };
+      return {
+        content: Buffer.from("ok"),
+        status: 200,
+        statusText: "OK",
+        headers: { toObject: () => ({ "content-type": "text/html" }) },
+      };
+    },
+    close: async () => undefined,
+  } as unknown as GarminSsoSession;
+  const fetch = createGarminSsoFetch(session);
+  const response = await fetch("https://sso.garmin.com/sso/signin", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      username: "owner@example.com",
+      password: "private-password",
+    }),
+  });
+  assert.equal(await response.text(), "ok");
+  assert.equal(request?.method, "POST");
+  assert.equal(request?.url, "https://sso.garmin.com/sso/signin");
+  assert.equal(request?.options.impersonate, "chrome");
+  assert.equal(
+    request?.options.content,
+    "username=owner%40example.com&password=private-password"
+  );
+});
 
 function fakeSession(options: { refreshFails?: boolean } = {}) {
   let now = 1_000;

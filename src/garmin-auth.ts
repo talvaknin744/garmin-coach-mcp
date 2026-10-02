@@ -3,6 +3,7 @@ import {
   createMemoryTokenStore,
   type GarminConnectClient,
 } from "@kaiord/garmin-connect";
+import { Session } from "impers";
 
 type GarminOAuthTokens = {
   oauth2: {
@@ -11,8 +12,11 @@ type GarminOAuthTokens = {
   };
 };
 
-export type GarminAuthClient = Pick<GarminConnectClient, "auth" | "service">;
+export type GarminAuthClient = Pick<GarminConnectClient, "auth" | "service"> & {
+  close?: () => Promise<void>;
+};
 export type GarminAuthClientFactory = () => GarminAuthClient;
+export type GarminSsoSession = Pick<Session, "request" | "close">;
 
 export type GarminCredentialProviderOptions = {
   email?: string;
@@ -35,17 +39,57 @@ function credentialsFromEnv(env: NodeJS.ProcessEnv = process.env): {
   return { email, password };
 }
 
+export function createGarminSsoFetch(
+  session: GarminSsoSession
+): typeof globalThis.fetch {
+  return async (input, init) => {
+    const url =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url;
+    const method =
+      init?.method || (input instanceof Request ? input.method : "GET");
+    const headers = Object.fromEntries(new Headers(init?.headers).entries());
+    const body = init?.body;
+    const content =
+      typeof body === "string"
+        ? body
+        : body instanceof URLSearchParams
+          ? body.toString()
+          : body instanceof Uint8Array
+            ? Buffer.from(body)
+            : undefined;
+    const response = await session.request(method, url, {
+      headers,
+      ...(content === undefined ? {} : { content }),
+      ...(init?.signal ? { signal: init.signal } : {}),
+      impersonate: "chrome",
+      timeout: 30,
+    });
+    return new Response(new Uint8Array(response.content), {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers.toObject(),
+    });
+  };
+}
+
 function quietClient(): GarminAuthClient {
+  const session = new Session({ impersonate: "chrome" });
   const logger = {
     debug: () => undefined,
     info: () => undefined,
     warn: () => undefined,
     error: () => undefined,
   };
-  return createGarminConnectClient({
+  const client = createGarminConnectClient({
     logger,
     tokenStore: createMemoryTokenStore(),
+    fetchFn: createGarminSsoFetch(session),
   });
+  return { ...client, close: () => session.close() };
 }
 
 export class GarminCredentialProvider {
@@ -103,6 +147,10 @@ export class GarminCredentialProvider {
       }
       return (await this.exportTokens()).oauth2.access_token;
     });
+  }
+
+  async close(): Promise<void> {
+    await this.client.close?.();
   }
 
   private async exportTokens(): Promise<GarminOAuthTokens> {
