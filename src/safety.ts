@@ -38,6 +38,7 @@ export function errorMessage(error: unknown): string {
   let message = error instanceof Error ? error.message : "Unknown error";
   const secrets = [
     process.env.GARMIN_TOKEN,
+    process.env.GARMIN_OAUTH_TOKENS,
     process.env.GARMIN_EMAIL,
     process.env.GARMIN_PASSWORD,
   ].filter((secret): secret is string => Boolean(secret?.trim()));

@@ -2,28 +2,28 @@
 
 Private Garmin coaching tools exposed through local stdio or a static-bearer-protected Streamable HTTP MCP service. The deployed service is intended for one owner: a single `MCP_AUTH_TOKEN` protects every `/mcp` request.
 
-The Garmin side uses a raw `GARMIN_TOKEN` from the environment and browserless HTTP through [`impers`](https://github.com/lexiforest/impers), which provides curl-impersonate TLS/HTTP fingerprints. No Playwright, browser profile, cookies, CSRF state, password, or refresh-token persistence is used.
+The Garmin side restores an OAuth session from `GARMIN_OAUTH_TOKENS` and uses browserless HTTP through [`impers`](https://github.com/lexiforest/impers), which provides curl-impersonate TLS/HTTP fingerprints. Username and password secrets are kept only as a fallback for a new Garmin SSO login; no Playwright or browser profile is used.
 
 The project preserves the upstream AGPL-3.0 license and attribution in [NOTICE](NOTICE).
 
 ## Local setup
 
-Prerequisites: Node.js 20+, pnpm 10.14.0, a Garmin Connect access token, and a synced watch.
+Prerequisites: Node.js 20+, pnpm 10.14.0, Garmin Connect credentials, and a synced watch.
 
 ```bash
 cd /Users/idanvaknin/Desktop/vunlbilits_res/garmin-coach-mcp
 pnpm install
 pnpm build
-GARMIN_TOKEN='…' MCP_TRANSPORT=stdio pnpm start
+node --env-file=.env dist/index.js
 ```
 
-Never commit or print the token. Rotate it manually when Garmin expires or revokes it. For local development, copy [.env.example](.env.example) to a private environment manager and fill in the values without committing the file.
+Copy [.env.example](.env.example) to `.env` and fill in the credentials locally. Never commit or print credentials or OAuth tokens.
 
-After building, the smallest live Garmin check is `GARMIN_TOKEN='…' pnpm smoke:garmin`. It calls one read-only allowlisted route and prints only success, route, and response type.
+After building, the smallest live Garmin check is `pnpm smoke:garmin` with `GARMIN_EMAIL` and `GARMIN_PASSWORD` in the local `.env`. It calls one read-only allowlisted route and prints only success, route, and response type.
 
 ## Render deployment
 
-The repository includes [render.yaml](render.yaml) for a free Node web service. In Render, create the Blueprint from the `render-token-auth` branch, then set the two secrets in the service settings. Render supplies `PORT`; the server binds to `0.0.0.0` and serves:
+The repository includes [render.yaml](render.yaml) for a free Node web service. In Render, create the Blueprint from the `render-token-auth` branch, then set the listed secrets in the service settings. Render supplies `PORT`; the server binds to `0.0.0.0` and serves:
 
 | Route | Access | Purpose |
 | --- | --- | --- |
@@ -34,13 +34,15 @@ The repository includes [render.yaml](render.yaml) for a free Node web service. 
 Required Render values (Render supplies `RENDER_EXTERNAL_URL`, so the public/resource URLs can stay unset):
 
 ```text
-GARMIN_TOKEN=<raw Garmin access token>
+GARMIN_EMAIL=<Garmin account email>
+GARMIN_PASSWORD=<Garmin account password>
+GARMIN_OAUTH_TOKENS=<OAuth token JSON bootstrapped by a local Garmin login>
 MCP_AUTH_TOKEN=<long random bearer secret>
 GARMIN_API_BASE_URL=https://connectapi.garmin.com
 MCP_TRANSPORT=streamable-http
 ```
 
-Generate `MCP_AUTH_TOKEN` with `openssl rand -hex 32`. Store it only in Render and in the client’s secure bearer-token setting. Rotate it by changing the Render value and updating the client. Do not put either Garmin or MCP secrets in Git.
+`GARMIN_OAUTH_TOKENS` lets Render restore a Garmin OAuth session established from the local machine, avoiding a new password/SSO login at every cold start. The client refreshes expired access tokens while it is running; if Garmin invalidates the underlying OAuth session, it falls back to SSO login. Generate and transfer this value without printing it, and store it only in Render's secret settings and the local `.env`. Generate `MCP_AUTH_TOKEN` with `openssl rand -hex 32`. Store it only in Render and in the client's secure bearer-token setting. Rotate it by changing the Render value and updating the client. Do not put any Garmin or MCP secrets in Git.
 
 Render free services sleep when idle and use ephemeral storage. This service intentionally stores no runtime Garmin state or persistent disk data.
 

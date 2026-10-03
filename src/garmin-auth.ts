@@ -2,6 +2,7 @@ import {
   createGarminConnectClient,
   createMemoryTokenStore,
   type GarminConnectClient,
+  type TokenData,
 } from "@kaiord/garmin-connect";
 import { Session } from "impers";
 
@@ -36,10 +37,31 @@ export class GarminSsoRateLimitError extends Error {
 export type GarminCredentialProviderOptions = {
   email?: string;
   password?: string;
+  tokens?: string;
   createClient?: GarminAuthClientFactory;
   now?: () => number;
   nowMilliseconds?: () => number;
 };
+
+function parseInitialTokens(raw: string | undefined): TokenData | undefined {
+  if (!raw?.trim()) return undefined;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (
+      !value ||
+      typeof value !== "object" ||
+      !("oauth1" in value) ||
+      !("oauth2" in value)
+    ) {
+      throw new Error("invalid token structure");
+    }
+    return value as TokenData;
+  } catch {
+    throw new Error(
+      "GARMIN_OAUTH_TOKENS must contain valid Garmin OAuth tokens"
+    );
+  }
+}
 
 function parseRetryAfter(value: string | null): number | undefined {
   if (!value?.trim()) return undefined;
@@ -129,8 +151,10 @@ export class GarminCredentialProvider {
   private readonly client: GarminAuthClient;
   private readonly now: () => number;
   private readonly nowMilliseconds: () => number;
+  private readonly initialTokens?: TokenData;
   private operation: Promise<string> | undefined;
   private loginCooldownUntil = 0;
+  private tokensRestored = false;
 
   constructor(options: GarminCredentialProviderOptions = {}) {
     const credentials =
@@ -142,10 +166,14 @@ export class GarminCredentialProvider {
     this.client = (options.createClient || quietClient)();
     this.now = options.now || (() => Math.floor(Date.now() / 1000));
     this.nowMilliseconds = options.nowMilliseconds || Date.now;
+    this.initialTokens = parseInitialTokens(
+      options.tokens ?? process.env.GARMIN_OAUTH_TOKENS
+    );
   }
 
   async getToken(): Promise<string> {
     return this.serialized(async () => {
+      await this.restoreInitialTokens();
       if (!this.client.auth.is_authenticated()) {
         const tokens = await this.exportTokens().catch(() => undefined);
         if (!tokens) await this.fullLogin();
@@ -166,6 +194,7 @@ export class GarminCredentialProvider {
 
   async recoverRejectedToken(rejectedToken: string): Promise<string> {
     return this.serialized(async () => {
+      await this.restoreInitialTokens();
       const current = await this.exportTokens().catch(() => undefined);
       if (
         current?.oauth2.access_token &&
@@ -189,6 +218,18 @@ export class GarminCredentialProvider {
 
   private async exportTokens(): Promise<GarminOAuthTokens> {
     return (await this.client.auth.export_tokens()) as GarminOAuthTokens;
+  }
+
+  private async restoreInitialTokens(): Promise<void> {
+    if (this.tokensRestored) return;
+    if (this.initialTokens) {
+      try {
+        await this.client.auth.restore_tokens(this.initialTokens);
+      } catch {
+        throw new Error("Unable to restore GARMIN_OAUTH_TOKENS");
+      }
+    }
+    this.tokensRestored = true;
   }
 
   private async fullLogin(): Promise<void> {

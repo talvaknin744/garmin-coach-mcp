@@ -101,7 +101,14 @@ function fakeSession(options: { refreshFails?: boolean } = {}) {
       loggedIn = false;
       expiresAt = 0;
     },
-    restore_tokens: async () => undefined,
+    restore_tokens: async (tokens: unknown) => {
+      const restored = tokens as {
+        oauth2: { access_token: string; expires_at: number };
+      };
+      currentToken = restored.oauth2.access_token;
+      expiresAt = restored.oauth2.expires_at;
+      loggedIn = true;
+    },
   };
   const client = {
     auth,
@@ -123,6 +130,14 @@ function fakeSession(options: { refreshFails?: boolean } = {}) {
   });
   return {
     provider,
+    providerWithTokens: (tokens: string) =>
+      new GarminCredentialProvider({
+        email: "owner@example.com",
+        password: "private-password",
+        tokens,
+        createClient: () => client,
+        now: () => now,
+      }),
     expire: () => {
       now = 2_000;
       expiresAt = 1_999;
@@ -130,6 +145,19 @@ function fakeSession(options: { refreshFails?: boolean } = {}) {
     counts: () => ({ loginCount, refreshCount }),
   };
 }
+
+test("restores a seeded OAuth session before attempting password SSO", async () => {
+  const session = fakeSession();
+  const provider = session.providerWithTokens(
+    JSON.stringify({
+      oauth1: { oauth_token: "oauth1", oauth_token_secret: "secret" },
+      oauth2: { access_token: "seeded-access", expires_at: 2_000 },
+    })
+  );
+
+  assert.equal(await provider.getToken(), "seeded-access");
+  assert.equal(session.counts().loginCount, 0);
+});
 
 test("logs in on startup and refreshes expired access tokens without disk storage", async () => {
   const session = fakeSession();

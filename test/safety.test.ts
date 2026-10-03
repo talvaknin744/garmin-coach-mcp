@@ -61,3 +61,18 @@ test("error messages redact Garmin login credentials", () => {
     else process.env.GARMIN_PASSWORD = previousPassword;
   }
 });
+
+test("error messages redact the seeded Garmin OAuth session", () => {
+  const previous = process.env.GARMIN_OAUTH_TOKENS;
+  const session = '{"oauth1":{"oauth_token":"private-oauth-session"}}';
+  process.env.GARMIN_OAUTH_TOKENS = session;
+  try {
+    assert.equal(
+      errorMessage(new Error(`invalid session ${session}`)),
+      "invalid session [redacted Garmin secret]"
+    );
+  } finally {
+    if (previous === undefined) delete process.env.GARMIN_OAUTH_TOKENS;
+    else process.env.GARMIN_OAUTH_TOKENS = previous;
+  }
+});
