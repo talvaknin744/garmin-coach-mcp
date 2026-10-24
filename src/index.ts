@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import "./native-cache.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 
 import { closeHttpServer, startHttpServer } from "./http.js";

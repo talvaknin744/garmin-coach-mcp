@@ -7,3 +7,4 @@ dist/
 !.env.example
 fit_files/
 dashboard.html
+.impers-cache/

@@ -16,6 +16,7 @@
   },
   "scripts": {
     "build": "tsc && chmod 755 dist/index.js",
+    "fetch:libcurl": "node scripts/fetch-libcurl.mjs",
     "start": "node dist/index.js",
     "start:http": "node dist/index.js http",
     "smoke:garmin": "pnpm build && node scripts/garmin-smoke.mjs",
