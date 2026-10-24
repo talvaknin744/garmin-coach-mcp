@@ -75,7 +75,9 @@ test("surfaces Garmin SSO 429 responses with the Retry-After cooldown", async ()
   );
 });
 
-function fakeSession(options: { refreshFails?: boolean } = {}) {
+function fakeSession(
+  options: { refreshFails?: boolean; refreshRateLimited?: boolean } = {}
+) {
   let now = 1_000;
   let currentToken = "access-1";
   let expiresAt = 0;
@@ -115,6 +117,7 @@ function fakeSession(options: { refreshFails?: boolean } = {}) {
     service: {
       list: async () => {
         refreshCount++;
+        if (options.refreshRateLimited) throw new GarminSsoRateLimitError();
         if (options.refreshFails) throw new Error("refresh rejected");
         currentToken = "access-refreshed";
         expiresAt = now + 3_600;
@@ -174,6 +177,15 @@ test("falls back to a fresh Garmin login when refresh is rejected", async () => 
   session.expire();
   assert.equal(await session.provider.getToken(), "access-login-2");
   assert.deepEqual(session.counts(), { loginCount: 2, refreshCount: 1 });
+});
+
+test("does not attempt password SSO when the token refresh is rate limited", async () => {
+  const session = fakeSession({ refreshRateLimited: true });
+  assert.equal(await session.provider.getToken(), "access-login-1");
+  session.expire();
+  await assert.rejects(session.provider.getToken(), GarminSsoRateLimitError);
+  await assert.rejects(session.provider.getToken(), GarminSsoRateLimitError);
+  assert.deepEqual(session.counts(), { loginCount: 1, refreshCount: 1 });
 });
 
 test("re-authenticates after a rejected Garmin API bearer token", async () => {

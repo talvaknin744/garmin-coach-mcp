@@ -253,12 +253,24 @@ export class GarminCredentialProvider {
   }
 
   private async refreshOrLogin(): Promise<void> {
+    const now = this.nowMilliseconds();
+    if (this.loginCooldownUntil > now) {
+      throw new GarminSsoRateLimitError(this.loginCooldownUntil - now);
+    }
     try {
       // The Garmin SDK automatically exchanges the OAuth1 token for a fresh
       // OAuth2 access/refresh-token pair when the access token has expired.
       // A harmless read forces that refresh before a new API call is sent.
       await this.client.service.list({ limit: 1 });
-    } catch {
+    } catch (error) {
+      // A rate-limited refresh means a password login would be rate limited
+      // too; start the cooldown instead of adding another SSO attempt.
+      if (error instanceof GarminSsoRateLimitError) {
+        const cooldownMs =
+          error.retryAfterMs ?? DEFAULT_SSO_RATE_LIMIT_COOLDOWN_MS;
+        this.loginCooldownUntil = this.nowMilliseconds() + cooldownMs;
+        throw new GarminSsoRateLimitError(cooldownMs);
+      }
       // Expired/revoked refresh credentials require a new Garmin SSO login.
       await this.fullLogin();
     }
