@@ -3,6 +3,12 @@ import {
   getGarminCredentialProvider,
   type GarminCredentialProvider,
 } from "./garmin-auth.js";
+import {
+  PersonalApiTokenProvider,
+  personalBaseUrl,
+  toPersonalRoute,
+  type PersonalRoute,
+} from "./garmin-personal.js";
 
 const DEFAULT_API_BASE_URL = "https://connectapi.garmin.com";
 const DEFAULT_TIMEOUT_SECONDS = 30;
@@ -43,6 +49,10 @@ export type GarminClientOptions = {
   timeoutSeconds?: number;
   impersonate?: string;
   requester?: GarminRequester;
+  personalApiKey?: string;
+  personalBaseUrl?: string;
+  retryDelaysMs?: number[];
+  sleep?: (ms: number) => Promise<void>;
 };
 
 export class GarminApiError extends Error {
@@ -180,17 +190,19 @@ function parsedResponse(
 
 export function assertGarminConfig(env: NodeJS.ProcessEnv = process.env): void {
   const hasToken = Boolean(env.GARMIN_TOKEN?.trim());
+  const hasPersonal = Boolean(env.GARMIN_PERSONAL_API_KEY?.trim());
   const hasEmail = Boolean(env.GARMIN_EMAIL?.trim());
   const hasPassword = Boolean(env.GARMIN_PASSWORD?.trim());
   if (hasEmail !== hasPassword) {
     throw new Error("Set both GARMIN_EMAIL and GARMIN_PASSWORD");
   }
-  if (!hasToken && !hasEmail) {
+  if (!hasToken && !hasEmail && !hasPersonal) {
     throw new Error(
-      "Set GARMIN_EMAIL and GARMIN_PASSWORD, or provide GARMIN_TOKEN"
+      "Set GARMIN_EMAIL and GARMIN_PASSWORD, set GARMIN_PERSONAL_API_KEY, or provide GARMIN_TOKEN"
     );
   }
   apiBaseUrl(env.GARMIN_API_BASE_URL);
+  if (hasPersonal) personalBaseUrl(env.GARMIN_PERSONAL_API_BASE_URL);
   timeoutSeconds(env.GARMIN_HTTP_TIMEOUT_SECONDS);
 }
 
@@ -201,6 +213,11 @@ export class GarminClient {
   private readonly impersonate: string;
   private readonly requester: GarminRequester;
   private readonly tokenProvider?: GarminTokenProvider;
+  private readonly personal?: PersonalApiTokenProvider;
+  private readonly personalBase?: string;
+  private readonly hasSso: boolean;
+  private readonly retryDelaysMs: number[];
+  private readonly sleep: (ms: number) => Promise<void>;
 
   constructor(options: GarminClientOptions = {}) {
     const credentialsConfigured = Boolean(
@@ -218,6 +235,25 @@ export class GarminClient {
       process.env.GARMIN_IMPERSONATE ||
       DEFAULT_IMPERSONATE;
     this.requester = options.requester || defaultRequester;
+    this.hasSso = Boolean(options.tokenProvider) || credentialsConfigured;
+    this.retryDelaysMs = options.retryDelaysMs ?? [1000, 3000];
+    this.sleep =
+      options.sleep ||
+      ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    const personalKey = (
+      options.personalApiKey ??
+      (options.token ? undefined : process.env.GARMIN_PERSONAL_API_KEY)
+    )?.trim();
+    if (personalKey) {
+      this.personalBase = personalBaseUrl(options.personalBaseUrl);
+      this.personal = new PersonalApiTokenProvider({
+        apiKey: personalKey,
+        baseUrl: this.personalBase,
+        requester: this.requester,
+        impersonate: this.impersonate,
+        timeoutSeconds: this.timeout || timeoutSeconds(),
+      });
+    }
   }
 
   async get(
@@ -249,7 +285,7 @@ export class GarminClient {
   }
 
   async close(): Promise<void> {
-    if (this.token) return;
+    if (this.token || !this.hasSso) return;
     await (this.tokenProvider || getGarminCredentialProvider()).close?.();
   }
 
@@ -267,6 +303,13 @@ export class GarminClient {
     Object.entries(mergedParams).forEach(([key, value]) => {
       url.searchParams.set(key, String(value));
     });
+    if (method === "GET" && this.personal) {
+      const route = toPersonalRoute(path, mergedParams);
+      if (route) {
+        const viaPersonal = await this.sendPersonal(this.personal, route);
+        if (viaPersonal) return viaPersonal;
+      }
+    }
     const options: GarminRequestOptions = {
       headers: { Accept: "application/json, application/octet-stream;q=0.9" },
       impersonate: this.impersonate,
@@ -284,9 +327,57 @@ export class GarminClient {
     return this.requester(method, url.toString(), options);
   }
 
+  // Read-only Personal API path (no SSO login). Returns undefined when the
+  // request should fall back to the SSO-backed connectapi route.
+  private async sendPersonal(
+    provider: PersonalApiTokenProvider,
+    route: PersonalRoute
+  ): Promise<GarminResponse | undefined> {
+    const url = new URL(`${this.personalBase}/${route.path}`);
+    Object.entries(route.params).forEach(([key, value]) => {
+      url.searchParams.set(key, String(value));
+    });
+    try {
+      let refreshed = false;
+      for (let attempt = 0; ; attempt += 1) {
+        const token = await provider.getToken();
+        const response = await this.requester("GET", url.toString(), {
+          headers: {
+            Accept: "application/json, application/octet-stream;q=0.9",
+            Authorization: `Bearer ${token}`,
+          },
+          impersonate: this.impersonate,
+          timeout: this.timeout || timeoutSeconds(),
+        });
+        if (response.status === 401 && !refreshed) {
+          refreshed = true;
+          provider.invalidate(token);
+          continue;
+        }
+        const retryable = response.status === 429 || response.status >= 500;
+        if (retryable && attempt < this.retryDelaysMs.length) {
+          await this.sleep(this.retryDelaysMs[attempt]);
+          continue;
+        }
+        const unsupported = [400, 401, 403, 404].includes(response.status);
+        if (unsupported && this.hasSso) return undefined;
+        return response;
+      }
+    } catch (error) {
+      if (this.hasSso) return undefined;
+      throw error;
+    }
+  }
+
   private authProvider() {
     if (this.token) return undefined;
-    return this.tokenProvider || getGarminCredentialProvider();
+    if (this.tokenProvider) return this.tokenProvider;
+    if (!this.hasSso && this.personal) {
+      throw new Error(
+        "This Garmin route is not available through the read-only Personal API key; set GARMIN_EMAIL and GARMIN_PASSWORD to enable it"
+      );
+    }
+    return getGarminCredentialProvider();
   }
 
   private currentToken(): Promise<string> {
