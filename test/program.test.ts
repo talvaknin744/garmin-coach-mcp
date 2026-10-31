@@ -18,11 +18,11 @@ function allSteps(value: unknown): Record<string, unknown>[] {
 test("program preserves five build weeks and documented deload", () => {
   const program = getTrainingProgram();
   assert.deepEqual(program.schedule, [
-    "Sunday: Pull",
+    "Sunday: Day A - Pull",
     "Monday: Run",
-    "Tuesday: Push",
+    "Tuesday: Day B - Push + Legs",
     "Wednesday: Rest",
-    "Thursday: Support",
+    "Thursday: Day C - Support (Push + Pull)",
     "Friday: Incline Walk 12%",
     "Saturday: Rest",
   ]);
@@ -106,7 +106,9 @@ test("strength reps use lap completion, preserve ranges, and invent no weight", 
   const strength = draft.workouts.filter(({ sport }) => sport === "strength");
   const serialized = JSON.stringify(strength);
   assert.match(serialized, /Weighted supinated pull-up.*4-6 reps.*RPE 8/i);
-  assert.match(serialized, /Bulgarian split squat.*6-10 reps\/leg.*RPE 8-9/i);
+  assert.match(serialized, /Hack squat.*replaces barbell back squat.*RPE 8-9/i);
+  assert.doesNotMatch(serialized, /Bulgarian split squat/i);
+  assert.doesNotMatch(serialized, /Current reference (?:35|55-60) kg/i);
   assert.match(serialized, /10 sec/i);
   assert.doesNotMatch(serialized, /weightValue|weightUnit/);
 
