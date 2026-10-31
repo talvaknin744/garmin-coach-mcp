@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { canonicalHash } from "./safety.js";
 
-const TEMPLATE_VERSION = "2026-08-17.v3";
+const TEMPLATE_VERSION = "2026-10-31.v4";
 const NO_TARGET = {
   workoutTargetTypeId: 1,
   workoutTargetTypeKey: "no.target",
@@ -120,11 +120,11 @@ const PUSH: Block[] = [
   },
   {
     description:
-      "Weighted dip technical single: 1 rep, RPE 6.5-7. Current reference 55-60 kg only; do not prescribe weight. Brace, descend about 1 sec to 90 degrees, drive hard, and lock out. Shoulders down, chest open, forearms vertical, no bounce. It must not feel hard.",
+      "Weighted dip technical single: 1 rep, RPE 6.5-7. Use your current-cycle working weight, not an old reference. Brace, descend about 1 sec to 90 degrees, drive hard, and lock out. Shoulders down, chest open, forearms vertical, no bounce. It must not feel hard.",
   },
   {
     description:
-      "Weighted dip working set: 6-8 reps, RPE 8-9. Descend about 1 sec, no pause, stop at 90 degrees, and drive up hard. Current reference 35 kg x 7 only; do not prescribe weight. Increase after clean 8+8.",
+      "Weighted dip working set: 6-8 reps, RPE 8-9. Descend about 1 sec, no pause, stop at 90 degrees, and drive up hard. Choose load from current-cycle performance. Increase after clean 8+8.",
     sets: 2,
   },
   {
@@ -139,8 +139,9 @@ const PUSH: Block[] = [
   },
   {
     description:
-      "Bulgarian split squat: 6-10 reps/leg, RPE 8-9. Increase only after stable 10+10.",
-    sets: 2,
+      "Hack squat (replaces barbell back squat): controlled working sets, RPE 8-9. Use your current machine-specific weight and rep target; do not reuse prior cycle loads.",
+    sets: 3,
+    restSeconds: 180,
   },
   {
     superset: [
@@ -398,7 +399,7 @@ export function buildTrainingWeek(input: {
             "pull",
             addDays(sunday, 0),
             "strength",
-            strengthPayload("Pull", PULL, deload)
+            strengthPayload("Day A - Pull", PULL, deload)
           ),
           workout(
             "run",
@@ -414,13 +415,13 @@ export function buildTrainingWeek(input: {
             "push",
             addDays(sunday, 2),
             "strength",
-            strengthPayload("Push", PUSH, deload)
+            strengthPayload("Day B - Push + Legs", PUSH, deload)
           ),
           workout(
             "support",
             addDays(sunday, 4),
             "strength",
-            strengthPayload("Support", SUPPORT, deload)
+            strengthPayload("Day C - Support (Push + Pull)", SUPPORT, deload)
           ),
           workout(
             "incline-walk",
@@ -454,11 +455,11 @@ export function getTrainingProgram() {
   return {
     templateVersion: TEMPLATE_VERSION,
     schedule: [
-      "Sunday: Pull",
+      "Sunday: Day A - Pull",
       "Monday: Run",
-      "Tuesday: Push",
+      "Tuesday: Day B - Push + Legs",
       "Wednesday: Rest",
-      "Thursday: Support",
+      "Thursday: Day C - Support (Push + Pull)",
       "Friday: Incline Walk 12%",
       "Saturday: Rest",
     ],
@@ -467,7 +468,7 @@ export function getTrainingProgram() {
       phase: week === 6 ? "deload" : "build",
     })),
     progression:
-      "Weeks 1-5 use the same program. Increase only when all sets are easy at the top of the range. Handstand push-up progression: 3+3 -> 4+3 -> 4+4 -> 5+4 -> 5+5 -> 6+6, then increase depth.",
+      "Weeks 1-5 repeat the same A/B/C structure with your current-cycle weights. Increase only when all sets are easy at the top of the range. Handstand push-up progression: 3+3 -> 4+3 -> 4+4 -> 5+4 -> 5+5 -> 6+6, then increase depth.",
     deload:
       "Week 6: half the work, shorter handstands, no heavy negative pull-up, one assistance set, and cardio one-third shorter.",
     sessions: { pull: PULL, push: PUSH, support: SUPPORT },
